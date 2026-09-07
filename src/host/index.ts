@@ -47,9 +47,12 @@ export function apply(ctx: Context): void {
 	const pending: PendingEvent[] = []
 	const waiters: Array<{ resolve: (value: PendingEvent[] | null) => void; timer: NodeJS.Timeout }> = []
 
+	// ---- 宿主向客户端发送事件,将消息添加到待处理队列 ----
 	function emit(event: string, args: unknown[] = []): void {
+		// 将事件添加到待处理队列中
 		pending.push({ event, args })
 		logger.info('emit:', event, ...args)
+		// 如果有等待的客户端，立即将事件发送给它们
 		if (waiters.length > 0) {
 			const snapshot = pending.splice(0)
 			while (waiters.length > 0) {
@@ -64,7 +67,7 @@ export function apply(ctx: Context): void {
 	// ---- 注册 Jira 全局工具 ----
 	registerJiraTools(ctx, resolveJiraSettings)
 
-	// 注册 /hello 通道。
+	// 注册 /hello 通道，用于客户端与宿主进行简单的通信测试
 	ctx.connection.rpc.handle('/hello', async (endpoint, payload, signal): Promise<ConnectionRpcResult<unknown>> => {
 		const args = (payload as { args?: Record<string, unknown> } | undefined)?.args ?? {}
 
@@ -75,9 +78,14 @@ export function apply(ctx: Context): void {
 			return { ok: true, value: `pong from host, hello ${display}!` }
 		}
 
+		// 注册 /jira/todos 通道，用于获取 Jira 待办事项列表
+		// 请求参数：无
 		if (endpoint === 'jira/todos') {
 			try {
-				const todos = await fetchJiraTodos(resolveJiraSettings())
+				// 获取 Jira 配置
+				const settings = resolveJiraSettings()
+				// 使用获取到的 Jira 配置去获取待办事项列表
+				const todos = await fetchJiraTodos(settings)
 				return { ok: true, value: todos }
 			} catch (error) {
 				if (error instanceof JiraConfigError) return rpcFailure(error.code, error.message)
@@ -85,12 +93,15 @@ export function apply(ctx: Context): void {
 				return rpcFailure('jira-error', `读取 Jira 待办失败：${String(error)}`)
 			}
 		}
-
+		// 注册 /jira/analyze 通道，用于分析 Jira issue
+		// 请求参数：
+		//   key: Jira issue 的 key
 		if (endpoint === 'jira/analyze') {
 			const key = typeof args.key === 'string' ? args.key : ''
 			if (key === '') return rpcFailure('bad-request', '缺少 key 参数')
 			try {
 				const settings = resolveJiraSettings()
+				// 使用获取到的 Jira 配置去获取 issue 详情
 				const issue = await fetchJiraIssueDetail(settings, key)
 				// 使用 llmConfig 对 issue 进行分析，返回分析结果
 				const analysis = await generateLlmAnalysis(ctx, llmConfig, issue, signal)
@@ -102,6 +113,10 @@ export function apply(ctx: Context): void {
 			}
 		}
 
+		// 注册 /jira/comment 通道，用于向 Jira issue 添加评论
+		// 请求参数：
+		//   key: Jira issue 的 key
+		//   text: 评论内容
 		if (endpoint === 'jira/comment') {
 			const key = typeof args.key === 'string' ? args.key : ''
 			const text = typeof args.text === 'string' ? args.text.trim() : ''
@@ -117,7 +132,7 @@ export function apply(ctx: Context): void {
 				return rpcFailure('jira-error', `添加 Jira 评论失败：${String(error)}`)
 			}
 		}
-
+		// 注册 /news/start 通道，用于启动新闻头条代理
 		if (endpoint === 'news/start') {
 			if (llmConfig.provider === undefined || llmConfig.model === undefined) {
 				return rpcFailure('llm-not-configured', 'llm.config.json 未配置 provider/model')
@@ -178,11 +193,17 @@ export function apply(ctx: Context): void {
 				return rpcFailure('news-error', `发起新闻会话失败：${String(error)}`)
 			}
 		}
-
+		// 注册 /events/poll 通道，用于轮询事件
+		// 请求参数：无
+		// 返回结果：
+		//   ok: 是否成功
+		//   value: 事件列表（如果 ok 为 true）
 		if (endpoint === 'events/poll') {
+			// 如果有待处理的事件，立即返回这些事件给客户端
 			if (pending.length > 0) {
 				return { ok: true, value: pending.splice(0) }
 			}
+			// 如果没有待处理的事件，则等待新的事件到来，或者超时返回 null
 			const events = await new Promise<PendingEvent[] | null>((resolve) => {
 				let entry: { resolve: (value: PendingEvent[] | null) => void; timer: NodeJS.Timeout }
 				const timer = setTimeout(() => {
