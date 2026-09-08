@@ -41,6 +41,8 @@ export function registerJiraTools(ctx: Context, resolveSettings: () => JiraSetti
             key: { type: 'string' },
             summary: { type: 'string' },
             typeName: { type: 'string' },
+            typeColor: { type: 'string' },
+            typeIconUrl: { type: 'string' },
             statusName: { type: 'string' },
           },
         },
