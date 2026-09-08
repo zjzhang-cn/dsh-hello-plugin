@@ -33,6 +33,86 @@
 | `docs/hello-plugin-capabilities.md` | 本插件 dsh 能力全景：已使用 / 未使用清单（逐项标注源码位置与潜在用途） |
 | `docs/learning-path.md` | 学习路径：按章节由简入深的学习路线 |
 
+## 使用方法
+
+### 1. 环境准备
+
+- Node.js ≥ 18
+- pnpm（包管理器）
+- 已安装并配置好的 [deepseek-harness](https://github.com/deepseek-ai/harness) 工作区
+
+### 2. 安装依赖
+
+```sh
+cd dsh-hello-plugin
+pnpm install
+```
+
+### 3. 配置凭据（可选，用于 Jira / LLM 功能）
+
+- **Jira**：复制示例文件为 `jira.config.json`（已 gitignore，不会提交）：
+  ```sh
+  cp jira.config.example.json jira.config.json
+  ```
+  编辑 `jira.config.json`，填入你的 Jira 实例地址、邮箱和 API Token：
+  ```json
+  {
+    "baseUrl": "https://your-jira.example",
+    "email": "you@example.com",
+    "apiToken": "<Jira API Token>"
+  }
+  ```
+
+- **LLM**：复制示例文件为 `llm.config.json`（已 gitignore）：
+  ```sh
+  cp llm.config.example.json llm.config.json
+  ```
+  编辑 `llm.config.json`，选择 provider 和 model（需与 harness 的 LLM 服务兼容）：
+  ```json
+  {
+    "provider": "deepseek-official",
+    "model": "deepseek-chat"
+  }
+  ```
+
+> 不配置 Jira/LLM 时插件仍可正常加载，对应功能会显示 `jira-not-configured` / `llm-not-configured` 提示，不影响其他功能。
+
+### 4. 构建
+
+```sh
+pnpm build
+```
+
+构建完成后会在 `lib/` 目录下生成两个文件：
+- `lib/host.js` — 宿主半区 bundle
+- `lib/client.js` — 客户端半区 bundle
+
+验证构建产物：
+```sh
+node --check lib/host.js lib/client.js
+```
+
+### 5. 运行插件
+
+在 `deepseek-harness` 工作区中以本地 dev patch 启动 dsh Web（推荐用 VS Code 的调试配置「DSH Web（hello-plugin patch）」），或手动执行：
+
+```sh
+# 在 deepseek-harness 目录下
+pnpm dsh web --patch /path/to/dsh-hello-plugin/dev.patch.yml
+```
+
+启动后在浏览器中打开 dsh Web UI，即可在右下角看到「我的待办」悬浮卡片。
+
+### 6. 快速验证
+
+| 操作 | 预期结果 |
+| --- | --- |
+| 点击 **hello** 按钮 | 按钮短暂显示 `pong from host, hello browser!`，1 秒后恢复 `hello world x{n}`（计数 +1）；宿主日志出现 `client ping: browser` |
+| 等待 5 秒 | 按钮上方出现气泡条 `hello/notice: host is alive at ...`（长轮询推送） |
+| 点击 **⟳ 刷新** | 重新拉取 Jira 待办列表（如已配置 Jira） |
+| 点击某个待办项 | 弹出 LLM 分析面板（如已配置 LLM） |
+| 点击 **📰 获取新闻** | 创建新会话，dsh Web UI 会话列表出现该会话，Agent 自动获取并总结 Google 新闻 |
+
 ## 架构：双面插件如何接入 dsh
 
 dsh 采用「双面（dual-face）」插件模型：同一个包同时提供 Node 宿主半区与浏览器客户端半区，两侧由同一份 vendored Cordis Loader 治理，插件加载模型详见 deepseek-harness 中的 `2026-07-23-client-plugin-loading-model.md`。
