@@ -5,12 +5,12 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import z from '@deepseek-ai/schemastery'
 import { name, inject, POLL_TIMEOUT_MS } from './constants'
 import { loadProjectJiraConfig, loadProjectLlmConfig } from './config'
-import { fetchJiraTodos, fetchJiraIssueDetail, addJiraComment } from './jira'
+import { fetchJiraTodos, fetchJiraIssueSummary, addJiraComment } from './jira'
 import { registerJiraTools } from './jira-tools'
-import { generateLlmAnalysis } from './llm'
+import { runJiraAnalysisSession } from './jira-agent'
 import { installGoogleNewsTool } from './news'
 import { JiraConfigError, rpcFailure } from './errors'
-import type { PendingEvent, JiraSettings, LlmConfig, JiraIssueDetail } from './types'
+import type { PendingEvent, JiraSettings, LlmConfig } from './types'
 
 export { name, inject }
 export type { JiraTodo, JiraSettings } from './types'
@@ -93,24 +93,49 @@ export function apply(ctx: Context): void {
 				return rpcFailure('jira-error', `读取 Jira 待办失败：${String(error)}`)
 			}
 		}
-		// 注册 /jira/analyze 通道，用于分析 Jira issue
+		// 注册 /jira/analyze 通道，用于发起对 Jira issue 的 Agent 会话分析
 		// 请求参数：
 		//   key: Jira issue 的 key
+		// 返回结果：{ sessionId }——分析会话已创建并在后台运行（归入左侧「Jira 分析」工作区），
+		// 宿主不等待 Agent 完成；分析结果 / 失败随后经 events/poll 长轮询事件
+		// jira/analysis-done / jira/analysis-failed 推送（见下方 emit 调用）。
 		if (endpoint === 'jira/analyze') {
 			const key = typeof args.key === 'string' ? args.key : ''
 			if (key === '') return rpcFailure('bad-request', '缺少 key 参数')
+			if (llmConfig.provider === undefined || llmConfig.model === undefined) {
+				return rpcFailure('llm-not-configured', 'llm.config.json 未配置 provider/model')
+			}
+			if (ctx.get('agents') === undefined) return rpcFailure('agents-unavailable', 'agents 服务不可用')
+			let summary: string
 			try {
-				const settings = resolveJiraSettings()
-				// 使用获取到的 Jira 配置去获取 issue 详情
-				const issue = await fetchJiraIssueDetail(settings, key)
-				// 使用 llmConfig 对 issue 进行分析，返回分析结果
-				const analysis = await generateLlmAnalysis(ctx, llmConfig, issue, signal)
-				return { ok: true, value: { key: issue.key, summary: issue.summary, analysis } }
+				// 预检：校验 Jira 配置与 issue 存在，并拿到 summary（供会话标题与任务消息使用）
+				const issue = await fetchJiraIssueSummary(resolveJiraSettings(), key)
+				summary = issue.summary
 			} catch (error) {
 				if (error instanceof JiraConfigError) return rpcFailure(error.code, error.message)
-				logger.warn('jira/analyze failed:', String(error))
-				return rpcFailure('jira-error', `分析 Jira issue 失败：${String(error)}`)
+				logger.warn('jira/analyze preflight failed:', String(error))
+				return rpcFailure('jira-error', `读取 Jira issue 失败：${String(error)}`)
 			}
+			const sessionId = 'jira-' + randomUUID()
+			// 后台驱动分析会话（不阻塞 RPC）；完成后/失败时经 emit 推送给前端
+			void runJiraAnalysisSession(ctx, { llmConfig, sessionId, key, summary })
+				.then((result) => {
+					logger.info('jira analysis done:', result.key, result.sessionId)
+					emit('jira/analysis-done', [{
+						key: result.key,
+						summary: result.summary,
+						analysis: result.analysis,
+						sessionId: result.sessionId,
+					}])
+				})
+				.catch((error) => {
+					logger.warn('jira analysis failed:', String(error))
+					emit('jira/analysis-failed', [{
+						sessionId,
+						message: error instanceof Error ? error.message : String(error),
+					}])
+				})
+			return { ok: true, value: { sessionId } }
 		}
 
 		// 注册 /jira/comment 通道，用于向 Jira issue 添加评论

@@ -2,6 +2,26 @@
 
 > 规则：**每次功能 / BUG 修改 / 实现都要记录开发日志。** 记录在 `docs/dev-log.md`，一次功能或修复一条记录。按时间倒序（最新在上）。
 
+## 2026-09-09 — README 新增「Jira 业务流程一览」章节
+
+**类型**：文档
+**涉及**：`README.md`、`docs/dev-log.md`
+**背景 / 问题**：README 的 Jira 描述按机制分节（配置 / 待办 / 分析 / 评论 / 工具），使用者视角的「整条业务怎么走」需要自行拼装。
+**改动**：README 在「快速验证」与「架构」之间新增「Jira 业务流程一览」：以四条链路为主线（前提配置 → 浏览待办 → 点击发起 Agent 会话分析并异步回传确认评论 → 会话内 jira_* 工具自由操作），每条标注参与者与关键端点，另附错误语义速查表。
+**验证**：README 渲染检查（表格与列表结构完整、与机制章节口径一致）。
+
+## 2026-09-09 — Jira 分析改为 Agent 会话：左栏「Jira 分析」工作区 + 结果长轮询回传
+
+**类型**：功能（重构）
+**涉及**：`src/host/jira-agent.ts`（新建）、`src/host/jira.ts`、`src/host/index.ts`、`src/host/llm.ts`（删除）、`src/client/components/HelloPill.tsx`、`src/client/components/AnalysisPanel.tsx`、`README.md`、`CLAUDE.md`、`AGENTS.md`、`docs/hello-plugin-capabilities.md`、`docs/plugin-dev-handbook.md`
+**背景 / 问题**：`jira/analyze` 经 `generateLlmAnalysis` 直连 `ctx.llm.stream` 生成分析文本——LLM 交互不可见、无会话记录；希望分析在 Agent 会话中完成、会话显示在左侧工作区，且分析完成后仍由前端询问是否添加到评论。
+**改动**：
+- 删除 `src/host/llm.ts`，新增 `src/host/jira-agent.ts`：`runJiraAnalysisSession` 创建会话（sessionId `jira-<uuid>`，agentOptions 取 `llm.config.json`）→ `workspaceRegistry.create(插件包根目录, 'Jira 分析')` + `attachSession`（独立分组，与「新闻头条」按不同目录路径并存）→ `sessionTitle.rename`「分析 KEY HH:mm:ss」→ `followup`（任务要求先调全局可见的 `jira_get_issue` 工具取完整详情再输出分析，并禁止写操作工具）→ `agent.whenIdle()` 等静止 → 扫 `session.events`（followup 前的 `seq` 边界之后）折叠最终文本（`assistant/message` 非空 text 逐条覆盖；`turn/end` reason 为 error/aborted 视为失败）。会话**不 dispose**，保留在左侧可查看/续聊。
+- `src/host/jira.ts` 新增 `fetchJiraIssueSummary`（`getIssue` 仅取 summary 字段）：会话创建前轻量预检（校验 Jira 配置与 issue 存在），为会话标题 / 任务消息提供摘要。
+- `src/host/index.ts` 的 `jira/analyze` 改为**异步发起**：预检（缺 provider/model → `llm-not-configured`；agents 缺失 → `agents-unavailable`；预检失败 → `jira-not-configured` / `jira-error`）→ fire-and-forget 启动会话 → **立即返回 `{ sessionId }`**；完成 / 失败分别经 `events/poll` 长轮询推送 `jira/analysis-done`（`{ key, summary, analysis, sessionId }`）/ `jira/analysis-failed`（`{ sessionId, message }`）。
+- 客户端：`HelloPill` 长轮询由「只留最新气泡」改为**按事件名分发**——`jira/analysis-done` / `jira/analysis-failed` 仅在 `sessionId` 匹配最近一次未决请求时生效（防旧会话结果覆盖新点击），其余事件维持气泡；loading 提示改为「Agent 正在分析…」；`AnalysisPanel` 新增 `sessionHint` prop 展示会话提示。
+**验证**：`pnpm build`（双半区类型检查）+ `node --check lib/host.js lib/client.js` 通过；bundle 含新会话逻辑。运行期验证（点击待办 → 左侧「Jira 分析」分组出现会话 → 完成后推送 → 面板「添加到评论」写回）需在挂载本 bundle 的 dsh profile 实测，步骤见 CLAUDE.md / README「开发与验证」。
+
 ## 2026-09-04 — README 新增「验证过的 dsh 能力」章节
 
 **类型**：文档

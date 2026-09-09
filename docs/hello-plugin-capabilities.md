@@ -25,8 +25,8 @@
 
 | 能力 | 状态 | 源码位置 | 使用场景 |
 | --- | --- | --- | --- |
-| `ctx.agents` | ✅ | `src/host/index.ts` | `agents.create()` 创建新闻总结 Agent 会话 |
-| `ctx.sessionTitle` | ✅ | `src/host/index.ts` | `sessionTitle.rename()` 命名会话标题（「获取新闻 <时间>」） |
+| `ctx.agents` | ✅ | `src/host/index.ts`、`src/host/jira-agent.ts` | `agents.create()` 创建新闻总结 / Jira 分析 Agent 会话；后者 `followup` 发任务后 `agent.whenIdle()` 等静止，从 `session.events` 折叠最终文本回传 |
+| `ctx.sessionTitle` | ✅ | `src/host/index.ts`、`src/host/jira-agent.ts` | `sessionTitle.rename()` 命名会话标题（「获取新闻 <时间>」/「分析 KEY <时间>」） |
 | `ctx.agentLoop` | ⬜ | — | 未使用 |
 | `ctx.sessions` | ⬜ | — | 未使用 |
 | `ctx.sessionPersistence` | ⬜ | — | 未使用 |
@@ -43,7 +43,7 @@
 
 | 能力 | 状态 | 源码位置 | 使用场景 |
 | --- | --- | --- | --- |
-| `ctx.llm` | ✅ | `src/host/llm.ts` | `ctx.llm.stream()` 分析 Jira issue 内容 |
+| `ctx.llm` | ⬜ | — | 未使用（原 Jira 分析用例已迁至 Agent 会话，不再直连 `ctx.llm.stream`；Agent 的模型经 `llm.config.json` 配置） |
 | `ctx.tools` | ✅ | `src/host/news.ts`、`src/host/jira-tools.ts` | `ctx.tools.register()` 注册全局工具：google_news（ScopedLayers）、jira_search_issues、jira_get_issue、jira_create_issue、jira_add_comment、jira_update_status、jira_get_transitions |
 | `ctx.systemPrompt` | ⬜ | — | 未使用 |
 | `ctx.tokenMeter` | ⬜ | — | 未使用 |
@@ -81,7 +81,7 @@
 | 能力 | 状态 | 源码位置 | 使用场景 |
 | --- | --- | --- | --- |
 | `ctx.settings` | ✅ | `src/host/index.ts` | 注册 jira namespace、读取 settings.yaml 配置 |
-| `ctx.workspaceRegistry` | ✅ | `src/host/index.ts` | `create()` / `setTitle()` / `attachSession()` 新闻工作区 |
+| `ctx.workspaceRegistry` | ✅ | `src/host/index.ts`、`src/host/jira-agent.ts` | `create(path, title)` / `attachSession()`：新闻会话归「新闻头条」（宿主 cwd），Jira 分析会话归「Jira 分析」（插件包根目录，独立分组） |
 | `ctx.credentials` | ⬜ | — | 未使用（jira 凭据走工程文件 jira.config.json） |
 | `ctx.storage` | ⬜ | — | 未使用 |
 | `ctx.storageDomain` | ⬜ | — | 未使用 |
@@ -136,8 +136,8 @@
 
 | 通道 | 状态 | 源码位置 | 使用场景 |
 | --- | --- | --- | --- |
-| **Unary RPC** | ✅ | `src/host/index.ts` + `src/client/` | 客户端 → 宿主：ping / jira/todos / jira/analyze / jira/comment / news/start |
-| **长轮询** | ✅ | `src/host/index.ts` | 宿主 → 客户端：`events/poll` 广播推送，15s 超时 |
+| **Unary RPC** | ✅ | `src/host/index.ts` + `src/client/` | 客户端 → 宿主：ping / jira/todos / jira/analyze（发起即返回 `{ sessionId }`）/ jira/comment / news/start |
+| **长轮询** | ✅ | `src/host/index.ts` | 宿主 → 客户端：`events/poll` 广播推送，15s 超时；既推 `hello/notice` 气泡，也推 `jira/analysis-done` / `jira/analysis-failed` 结构化载荷 |
 | **Typert Remote** | ⬜ | — | 未使用 |
 | **Remote events** | ⬜ | — | 未使用（allowlist 限制，改用长轮询） |
 | **WebSocket mux** | ⬜ | — | 未使用 |

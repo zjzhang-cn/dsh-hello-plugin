@@ -202,7 +202,7 @@ function apply(ctx) {
 
 ## 05 踩坑记录
 
-四个坑。前两个是同一类问题的两面：作用域；后两个是长轮询的并发正确性。
+七个坑。前两个是同一类问题的两面：作用域；中间三个是通道独占与长轮询的并发正确性；最后两个是 Agent 会话结果等待的语义。
 
 | 坑 | 现象 | 原因 | 修法 |
 | --- | --- | --- | --- |
@@ -211,6 +211,8 @@ function apply(ctx) {
 | 想拦截 /api | api-gateway 独占 | `/api` 共享通道只允许一个 interceptor（api-gateway 已占用） | 开独立通道 `rpc.handle('/hello', …)` |
 | 长轮询 waiter 单槽 | 并发 poll 互相覆盖，先到的请求永远挂起 | 单槽记录一个挂起请求 | 用 `waiters` 数组，事件到达唤醒全部 |
 | 广播 splice 竞态 | 第一个 waiter 拿光队列，后续拿空 | resolve 参数里 `splice(0)`，事件被第一个消费者耗尽 | emit 时先 `splice(0)` 一次快照，再分发给所有 waiter |
+| 想等 Agent 最终答复文本 | `whenIdle()` 正常 resolve——模型失败也不 reject | 失败信息只进 `turn/end` reason 与 `agent/error` 事件 | followup 前记 `session.seq` 边界，结束后扫 events：`turn/end` reason 为 error/aborted 判定失败，按 `assistant/message` 非空 text 折叠最终文本 |
+| 会话要保留在左侧工作区 | `handle.dispose()` 后左侧会话消失 | dispose = 停止 + 注销 + 删 session | 分析 / 新闻会话完成后不 dispose，留在 UI 供查看或续聊 |
 
 ---
 
@@ -226,6 +228,8 @@ function apply(ctx) {
 - [ ] 宿主每 5 秒（无需操作）按钮上方出现新的气泡条 `hello/notice: host is alive at ...`（只保留最新一条），宿主日志追加 `emit: hello/notice ...`（长轮询）
 - [ ] 待办卡片头部「⟳」刷新按钮：点击后重新拉取列表
 - [ ] 配置 Jira 凭据后，卡片展示「我的待办」列表（每项含类型徽章 + 摘要 + `KEY · 状态`）；未配置时显示 `Jira: jira-not-configured`
+- [ ] 配置 `llm.config.json` 后点击待办项：面板「Agent 正在分析…」（附会话提示）；宿主日志出现会话创建与 `emit: jira/analysis-done`；左侧工作区出现「Jira 分析」分组与「分析 KEY HH:mm:ss」会话（运行中可点开查看 user/message → `jira_get_issue` 工具调用 → 输出）；完成后面板展示分析 + 「添加到评论 / 取消」，同意则「✅ 已添加到 Jira 评论」
+- [ ] 未配置 LLM 时点击待办立即显示 `llm-not-configured`；会话完成前再次点击被 loading 门闩挡住，done/failed 事件仅在与本次 sessionId 匹配时落到面板（旧/无关会话事件被忽略）
 
 ---
 

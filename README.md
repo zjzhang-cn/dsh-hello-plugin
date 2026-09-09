@@ -11,15 +11,15 @@
 | `src/host/constants.ts` | 常量：name、inject、POLL_TIMEOUT_MS、ISSUE_TYPE_COLORS、FALLBACK_COLORS |
 | `src/host/errors.ts` | 错误类：JiraConfigError、rpcFailure |
 | `src/host/config.ts` | 工程配置文件加载：jira.config.json / llm.config.json 逐级查找与解析 |
-| `src/host/jira.ts` | Jira API 工具：fetchJiraTodos、fetchJiraIssueDetail、addJiraComment、adfToText |
-| `src/host/llm.ts` | LLM 分析：generateLlmAnalysis（BlockAssembler 聚合输出） |
+| `src/host/jira.ts` | Jira API 工具：fetchJiraTodos、fetchJiraIssueDetail、fetchJiraIssueSummary、addJiraComment、adfToText |
+| `src/host/jira-agent.ts` | Jira 分析 Agent 会话：runJiraAnalysisSession（建会话 → 等静止 → 从会话日志折叠最终文本，替代原 llm.ts 直连 LLM） |
 | `src/host/news.ts` | Google News 工具：fetchGoogleNews、installGoogleNewsTool（ScopedLayers 注册） |
 | `src/client/index.ts` | 客户端入口：通过 `ctx.slots.inject` 注册 `HelloPill` 到 `shell.overlay` 插槽 |
 | `src/client/types.ts` | 共享类型：HelloEvent、JiraTodo、JiraAnalysis |
 | `src/client/components/HelloPill.tsx` | 主容器组件：管理状态 + RPC 调用 + 组合子组件 |
 | `src/client/components/TodoCard.tsx` | 待办列表卡片：header + 刷新按钮 + 错误条 + TodoItem 列表 |
 | `src/client/components/TodoItem.tsx` | 单个待办项：类型徽章 + 摘要 + KEY/状态 |
-| `src/client/components/AnalysisPanel.tsx` | LLM 分析面板：loading / error / result + 评论操作 |
+| `src/client/components/AnalysisPanel.tsx` | Agent 分析面板：loading（含会话提示）/ error / result + 评论操作 |
 | `src/client/components/EventBubbles.tsx` | 事件气泡条 |
 | `src/client/components/NewsStatus.tsx` | 新闻会话状态提示条 |
 | `src/client/components/NewsButton.tsx` | 获取新闻按钮 |
@@ -110,8 +110,45 @@ pnpm dsh web --patch /path/to/dsh-hello-plugin/dev.patch.yml
 | 点击 **hello** 按钮 | 按钮短暂显示 `pong from host, hello browser!`，1 秒后恢复 `hello world x{n}`（计数 +1）；宿主日志出现 `client ping: browser` |
 | 等待 5 秒 | 按钮上方出现气泡条 `hello/notice: host is alive at ...`（长轮询推送） |
 | 点击 **⟳ 刷新** | 重新拉取 Jira 待办列表（如已配置 Jira） |
-| 点击某个待办项 | 弹出 LLM 分析面板（如已配置 LLM） |
+| 点击某个待办项 | 发起 Agent 分析会话：左侧「Jira 分析」工作区出现会话，完成后悬浮面板询问是否添加到评论（如已配置 Jira + LLM） |
 | 点击 **📰 获取新闻** | 创建新会话，dsh Web UI 会话列表出现该会话，Agent 自动获取并总结 Google 新闻 |
+
+## Jira 业务流程一览
+
+从「我的待办」悬浮卡片出发，本插件的 Jira 功能由四条相互衔接的业务链路组成（端点与机制细节见下文各章节）。
+
+**0. 前提 —— 两处配置**
+
+| 配置 | 位置 | 未配置时的表现 |
+| --- | --- | --- |
+| Jira 凭据（baseUrl / email / apiToken） | 工程根 `jira.config.json`（优先），或 `$DSH_HOME/settings.yaml` 的 `jira:` 节 | 列表与分析均提示 `jira-not-configured` |
+| Agent 模型（provider / model） | 工程根 `llm.config.json` | 点击分析立即提示 `llm-not-configured` |
+
+**链路一：浏览「我的待办」**（纯只读，是后续链路的入口菜单）
+挂载后自动拉取 `assignee = currentUser() AND resolution = Unresolved` 的列表 → 悬浮卡片展示（类型徽章 + 摘要 + `KEY · 状态`）；头部 ⟳ 随时刷新；失败显示红色提示条，不影响其他功能。
+
+**链路二：点击待办 → Agent 会话分析**（请求/应答拆成「发起 + 异步回传」两步，分析过程左侧工作区实时可见）
+1. 点击待办项 → `jira/analyze` 预检配置与 issue → 宿主 `agents.create` 新会话（`jira-<uuid>`），归入独立「Jira 分析」工作区、命名「分析 KEY HH:mm:ss」→ **立即返回 `{ sessionId }`**，面板显示「Agent 正在分析…」。
+2. 分析在会话内进行：左侧工作区实时可见完整过程（user/message → `jira_get_issue` 工具调用 → 输出）；任务提示要求 Agent **只用读操作、不写 Jira**。
+3. 会话静止后，宿主从会话日志取出最终文本，经 `events/poll` 长轮询推送 `jira/analysis-done`（失败推送 `jira/analysis-failed`）；面板自动切换到分析结果（推送按 `sessionId` 匹配最近一次发起，旧会话结果不会覆盖新面板）。
+4. 是否写回由你决定：面板「添加到评论 / 取消」——点「添加到评论」→ `jira/comment` 以 ADF 格式写回该 issue → 显示「✅ 已添加到 Jira 评论」。
+5. 分析会话完成后保留在左侧「Jira 分析」工作区：可点开回顾，也可直接继续对话（进入链路三）。
+
+**链路三：会话内直接操作 Jira**（进阶）
+宿主启动时全局注册了 6 个 `jira_*` 工具，任何 Agent 会话（含分析会话、新闻会话）都可见、可调用：
+- 读：`jira_search_issues`（任意 JQL）、`jira_get_issue`（详情）、`jira_get_transitions`（状态变更列表）
+- 写：`jira_create_issue`、`jira_add_comment`、`jira_update_status`
+
+在左侧打开任意会话直接吩咐 Agent 即可（如「把 ABC-123 改成已完成」）。注意：**写工具目前没有审批门槛**（未接入 `ctx.approval` / `userQuestions`），分析任务内部也明确禁止调用写工具——写操作是否执行完全由你在会话里指示。
+
+**错误语义速查**
+
+| 提示 | 含义 |
+| --- | --- |
+| `jira-not-configured` | Jira 凭据两处都未配置 |
+| `llm-not-configured` | 未配置 `llm.config.json`（仅分析链路需要） |
+| `jira-error` | 读写 Jira API 失败 |
+| `jira/analysis-failed` | 分析会话运行失败（模型/工具出错；会话仍留在左栏，可点开查看原因） |
 
 ## 架构：双面插件如何接入 dsh
 
@@ -156,21 +193,23 @@ dsh 采用「双面（dual-face）」插件模型：同一个包同时提供 Nod
 - **宿主端点**：`/hello/jira/todos` 调用 `GET {baseUrl}/rest/api/3/search/jql`（Basic Auth，10 秒超时），JQL 为 `assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC`，每项映射为 `{ key, summary, typeName, typeColor, typeIconUrl, statusName }` —— 类型颜色按名称匹配常见中英文 Jira 类型，其余从色板确定性取值；相对图标路径自动拼接 baseUrl。
 - **客户端**：挂载后自动加载待办，展示为悬浮卡片「我的待办」列表；头部右侧有刷新按钮（⟳），点击刷新列表；每项为类型徽章（图标或代表色圆点 + 类型名）+ 摘要 + `KEY · 状态`；点击底部 hello 按钮 ping 宿主并刷新待办；调用失败显示红色错误条。
 
-## LLM 分析与评论
+## Agent 会话分析（Jira issue 分析与评论）
 
-点击某个待办项，可以让 LLM 分析该 issue 的内容，并选择是否把分析结论作为评论写回 Jira：
+点击某个待办项，宿主会发起一个 **Agent 会话**分析该 issue（不再直连 `ctx.llm`）；分析过程在左侧工作区实时可见，完成后客户端询问是否把结论作为评论写回 Jira：
 
-- **LLM 配置**（工程根 `llm.config.json`，已 gitignore，模板见 `llm.config.example.json`）：
+- **LLM / Agent 配置**（工程根 `llm.config.json`，已 gitignore，模板见 `llm.config.example.json`）：
   ```json
   {
     "provider": "deepseek-official",
     "model": "deepseek-chat"
   }
   ```
-  未配置时 `jira/analyze` 端点返回错误提示。
-- **分析端点**：`/hello/jira/analyze`（`{ args: { key } }`）。host 先读 issue 详情（summary + description + 已有评论，ADF 转纯文本），再调 `ctx.llm.stream`（`BlockAssembler` 聚合输出）生成分析文本，返回 `{ key, summary, analysis }`。LLM 服务用 `ctx.get('llm')` 可选获取，宿主未挂载 llm 时返回明确错误。
+  未配置时 `jira/analyze` 端点立即返回 `llm-not-configured`。
+- **发起端点**：`/hello/jira/analyze`（`{ args: { key } }`）。host 先轻量预检（`fetchJiraIssueSummary` 只取 summary，校验 Jira 配置与 issue 存在）→ `agents.create` 新会话（sessionId `jira-<uuid>`，agentOptions 取 `llm.config.json` 的 provider/model）→ 归入「Jira 分析」工作区 → 命名「分析 KEY HH:mm:ss」→ `followup` 让 Agent 先调 `jira_get_issue`（全局注册、会话可见）取完整详情再输出分析（任务提示禁止写操作工具）→ **立即返回 `{ sessionId }`**，会话后台运行，不阻塞 RPC。
+- **会话可见性**：会话归入**独立「Jira 分析」工作区**（workspace 路径为插件包根目录，与 cwd 的「新闻头条」工作区按目录并存、左侧并列显示）；`attachSession` + `api-session/added` 自动让会话行出现在左侧，点开可见 user/message → `jira_get_issue` 工具调用（tool/call + tool/result）→ assistant 分析的完整过程；会话保留不销毁，可继续对话。
+- **结果回传（长轮询推送）**：分析完成 → 宿主 `emit('jira/analysis-done', [{ key, summary, analysis, sessionId }])`，经 `events/poll` 推送到前端；失败 → `emit('jira/analysis-failed', [{ sessionId, message }])`。客户端按事件名分发，仅当 `sessionId` 匹配最近一次发起且未决的请求时生效（旧会话结果不会覆盖新面板）。
 - **评论端点**：`/hello/jira/comment`（`{ args: { key, text } }`）。`POST {baseUrl}/rest/api/3/issue/{key}/comment`，body 用 ADF 格式。
-- **客户端交互**：点击待办项 → 出现「LLM 正在分析…」面板 → 展示分析文本 + 「添加到评论 / 取消」按钮 → 同意则写回 Jira 并显示「✅ 已添加到 Jira 评论」。
+- **客户端交互**：点击待办项 → 出现「Agent 正在分析…」面板（附「会话已创建，在左侧工作区可查看实时过程」提示）→ 收到 `jira/analysis-done` 后展示分析文本 + 「添加到评论 / 取消」按钮 → 同意则写回 Jira 并显示「✅ 已添加到 Jira 评论」。
 
 ## Google 新闻会话（Agent 新会话）
 
@@ -208,7 +247,7 @@ ssh -L 3080:127.0.0.1:3080 <remote-host>
 
 ## 验证过的 dsh 能力
 
-这个插件是 dsh 双面插件的「接线图 + 边界探针」—— 每个功能都对应一条实际走通的 dsh 能力。按 [docs/hello-plugin-capabilities.md](docs/hello-plugin-capabilities.md)（已使用 ✅ / 未使用 ⬜ 的完整清单）与 [plugin-capability-catalog.md](plugin-capability-catalog.md)（能力全目录）梳理，**已实际使用 10 项**：
+这个插件是 dsh 双面插件的「接线图 + 边界探针」—— 每个功能都对应一条实际走通的 dsh 能力。按 [docs/hello-plugin-capabilities.md](docs/hello-plugin-capabilities.md)（已使用 ✅ / 未使用 ⬜ 的完整清单）与 [plugin-capability-catalog.md](plugin-capability-catalog.md)（能力全目录）梳理，**已实际使用 9 项**：
 
 | 能力 | 插件里的体现 | 顺带验证的约束 |
 | --- | --- | --- |
@@ -216,17 +255,20 @@ ssh -L 3080:127.0.0.1:3080 <remote-host>
 | **Cordis 内核** | `name`+`apply(ctx)`、`inject` 依赖注入、`ctx.effect` 生命周期、`ctx.logger`、`ctx.get` 可选获取 | 一切注册包进 `ctx.effect()`；服务缺失用 `ctx.get` 容错 |
 | **Unary RPC**（客户端 → 宿主） | `connection.rpc.call('/hello', 'ping'…)` → `rpc.handle` handler | payload 信封 `{ args }`；结果 `{ ok, value } \| { ok, error }`；**`/api` 被 api-gateway 独占**，自定义通道须另开 |
 | **长轮询**（宿主 → 客户端） | `pending` 队列 + `waiters` 挂起表，`events/poll` 广播推送 | 标准 Remote events 转发对自定义事件不适用：`registerRemoteEvents` 是单例 + 事件名须进 allowlist —— 改用长轮询 |
-| **Agent 会话** | `ctx.agents.create` + `agent.followup` + `whenIdle`，驱动 Agent 获取新闻并总结 | 宿主建会话自动触发 `api-session/added` → Web UI 会话列表可见 |
+| **Agent 会话** | `ctx.agents.create` + `agent.followup` + `whenIdle`，驱动 Agent 获取新闻 / 分析 Jira issue（最终文本从 `session.events` 折叠回传，jira_* 全局工具对会话可见可直接调用） | 宿主建会话自动触发 `api-session/added` → Web UI 会话列表可见；`whenIdle` 对模型失败**静默 resolve**，须扫 `turn/end` reason 判定；**`dispose()` 会删除会话**（左栏条目消失），要保留可见就不 dispose |
 | **作用域工具** | `ctx.tools.register` 从 agentCtx 注册 `google_news`（ScopedLayers） | 仅该会话 Agent 可见，不污染全局；parameters 须**完整 JSON Schema**（简写被模型 API 拒绝） |
-| **LLM 直连** | `ctx.llm.stream` + `BlockAssembler` 分析 Jira issue | `ctx.get('llm')` 缺失时返回明确错误，插件照常加载 |
-| **会话命名 / 工作区分组** | `ctx.sessionTitle.rename`；`workspaceRegistry.create` + `setTitle` + `attachSession` | 会话归入「新闻头条」工作区分组显示 |
+| **会话命名 / 工作区分组** | `ctx.sessionTitle.rename`；`workspaceRegistry.create` + `setTitle` + `attachSession` | workspace 按真实目录路径去重：新闻会话归「新闻头条」（宿主 cwd），Jira 分析会话归「Jira 分析」（插件包根目录）——同目录无法建第二个不同名分组，故用不同路径 |
 | **settings 与工程配置** | `ctx.settings` 注册 jira namespace；工程根 `jira.config.json` / `llm.config.json` 逐级查找 | 工程配置优先于全局 settings；凭据不提交 |
 | **插槽与 UI** | `ctx.slots` 注入 `HelloPill` 到 `shell.overlay`（inject 业务面把服务变组件 props） | 组件只靠 props、永不引用模块级 ctx；**组件必须直接传**（非包装函数） |
+
+原「LLM 直连」用例（`ctx.llm.stream` 分析 Jira issue）已迁移到 Agent 会话（见上「Agent 会话」行），`ctx.llm` 现不再被直接调用——Agent 的模型仍经 `llm.config.json` 配置。
 
 **三类能力供插件扩展但本插件刻意未用**：Typert Remote（生成式）/ Remote events（allowlist）/ WebSocket mux —— 均因 harness 独占约束选择自定义通道实现，详见「[客户端调用宿主](#客户端调用宿主)」「[宿主主动推送](#宿主主动推送到客户端长轮询)」章节的选型理由。
 
 ## 开发日志
 
+- **2026-09-09 README 新增「Jira 业务流程一览」** — 以四条链路为主线整理 Jira 业务（前提配置 → 浏览待办 → 点击发起 Agent 会话分析并异步回传确认评论 → 会话内 jira_* 工具操作），附错误语义速查；详见 [开发日志](docs/dev-log.md)。
+- **2026-09-09 Jira 分析改为 Agent 会话并推回前端** — `jira/analyze` 不再直连 `ctx.llm.stream`：发起新会话（`jira-<uuid>`）归入独立「Jira 分析」工作区（左侧可见、标题「分析 KEY HH:mm:ss」），Agent 经全局 `jira_get_issue` 工具取详情后分析；端点立即返回 `{ sessionId }`，完成后宿主经 `events/poll` 推送 `jira/analysis-done` / `jira/analysis-failed`，客户端按 sessionId 匹配落面板、沿用「添加到评论」确认；删除 `src/host/llm.ts`（新增 `jira-agent.ts`）；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-01 README 新增「验证过的 dsh 能力」章节** — 概要整理本插件实际使用（10 项）与刻意未用（3 项）的 dsh 能力，指向详尽的 `docs/hello-plugin-capabilities.md` 与能力全目录；结构表补充 capabilities 文档；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-01 fetchGoogleNews 支持 HTTP 代理** — 按 curl 语义读取 `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`（兼容小写）与 `NO_PROXY`；代理链路纯 Node 内建实现（https 走 CONNECT 隧道、http 走绝对 URI 形式，含 Basic 认证、重定向跟随、chunked 解码），无代理时行为不变；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-01 扩展 Jira 能力并注册全局工具** — `src/host/jira.ts` 新增搜索/创建/状态变更函数；新建 `src/host/jira-tools.ts` 注册 6 个全局 Jira 工具（jira_search_issues、jira_get_issue、jira_create_issue、jira_add_comment、jira_update_status、jira_get_transitions）；详见 [开发日志](docs/dev-log.md)。
@@ -273,7 +315,7 @@ ssh -L 3080:127.0.0.1:3080 <remote-host>
 3. 点击底部 hello 按钮：宿主端日志追加 `client ping: browser`，按钮文本短暂变为 `pong from host, hello browser!`，**1 秒后恢复 `hello world x{n}`（计数 +1）** —— 表示客户端 → 宿主的 RPC 链路打通。
 4. 宿主每 5 秒（无需操作）Web 端按钮上方出现新的气泡条 `hello/notice: host is alive at ...`，宿主日志追加 `emit: hello/notice ...` —— 表示宿主 → 客户端的推送链路（长轮询）打通。
 5. 配置 Jira 凭据（任选其一，工程文件优先）后，卡片展示「我的待办」列表（每项含类型徽章 + 摘要 + `KEY · 状态`）；未配置时显示 `Jira: jira-not-configured` 提示条。开发时在工程根放 `jira.config.json`（见 `jira.config.example.json`）即可，无需改全局 settings.yaml。
-6. 在工程根放 `llm.config.json`（见 `llm.config.example.json`）配置 provider/model 后，点击某个待办项：出现「LLM 正在分析…」→ 展示分析面板 → 点「添加到评论」写回 Jira 并显示「✅ 已添加到 Jira 评论」；未配置 LLM 时显示分析失败提示。
+6. 在工程根放 `llm.config.json`（见 `llm.config.example.json`）配置 provider/model 后，点击某个待办项：面板出现「Agent 正在分析…」（附会话提示）；宿主日志出现会话创建与 `emit: jira/analysis-done`；左侧工作区出现「Jira 分析」分组与「分析 KEY HH:mm:ss」会话（运行中可点开查看 user/message → `jira_get_issue` 工具调用 → 输出的完整过程）→ 完成后面板展示分析文本 → 点「添加到评论」写回 Jira 并显示「✅ 已添加到 Jira 评论」；未配置 LLM 时立即显示 `llm-not-configured`。
 7. 点击「📰 获取新闻」按钮：按钮上方显示「✅ 已创建会话 news-xxx，在会话列表查看 Agent 总结」；dsh Web UI 会话列表自动出现该会话，点开可见完整 LLM 交互（user/message → google_news 工具调用含新闻列表 → assistant 总结）。未配置 LLM 时显示 `llm-not-configured` 错误条。
 
 客户端半区在 dev 模式下由 harness 的 `scripts/dev-web.ts` watch 构建（按 `dsh.client` 扫描发现），改动后无需手动打包。

@@ -5,6 +5,8 @@ interface AnalysisPanelProps {
   analysis: JiraAnalysis | null
   analysisLoading: boolean
   analysisError: string | null
+  /** 分析会话已创建时的提示文案（等待 Agent 完成期间展示）。 */
+  sessionHint: string | null
   commentState: 'idle' | 'submitting' | 'added' | 'error'
   commentError: string | null
   onAddComment: () => void
@@ -15,6 +17,7 @@ export function AnalysisPanel({
   analysis,
   analysisLoading,
   analysisError,
+  sessionHint,
   commentState,
   commentError,
   onAddComment,
@@ -28,7 +31,13 @@ export function AnalysisPanel({
         borderRadius: '10px', width: '300px', padding: '10px 12px', fontSize: '12px',
         color: '#6a7c99',
       },
-    }, 'LLM 正在分析…')
+    },
+    React.createElement('div', null, 'Agent 正在分析…'),
+    sessionHint !== null
+      ? React.createElement('div', {
+          style: { marginTop: '4px', fontSize: '11px', color: '#94a3b8' },
+        }, sessionHint)
+      : null)
   }
 
   if (analysisError !== null) {

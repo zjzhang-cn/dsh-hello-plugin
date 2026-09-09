@@ -12,8 +12,8 @@ src/host/types.ts        共享类型（PendingEvent、JiraSettings、JiraTodo �
 src/host/constants.ts    常量（name、inject、POLL_TIMEOUT_MS、颜色映射等）
 src/host/errors.ts       错误类（JiraConfigError、rpcFailure）
 src/host/config.ts       工程配置文件加载（jira.config.json / llm.config.json）
-src/host/jira.ts         Jira API 工具（fetchJiraTodos、fetchJiraIssueDetail、addJiraComment）
-src/host/llm.ts          LLM 分析（generateLlmAnalysis）
+src/host/jira.ts         Jira API 工具（fetchJiraTodos、fetchJiraIssueDetail、fetchJiraIssueSummary、addJiraComment）
+src/host/jira-agent.ts   Jira 分析 Agent 会话（runJiraAnalysisSession：建会话 → 等静止 → 折叠最终文本）
 src/host/news.ts         Google News 工具（fetchGoogleNews、installGoogleNewsTool）
 src/client/index.ts      客户端入口：注册 HelloPill 到 shell.overlay 插槽
 src/client/types.ts      共享类型（HelloEvent、JiraTodo、JiraAnalysis）
@@ -82,12 +82,13 @@ dsh 的标准事件转发（`ctx.remote.$on`）对自定义事件不适用：`re
 - **端点**：`/hello/jira/todos`。调用 `GET {baseUrl}/rest/api/3/search/jql`（Basic Auth），JQL `assignee = currentUser() AND resolution = Unresolved`，每项映射为 `{ key, summary, typeName, typeColor, typeIconUrl, statusName }`（类型颜色按名称匹配常见中英文 Jira 类型，否则从色板确定性取值；相对图标路径拼 baseUrl）。**注意 Cloud 实例已移除 `/rest/api/2/search`（410），须用 api/3。**
 - **客户端**：挂载后自动加载待办，展示为悬浮「我的待办」列表（每项含类型徽章，点击可触发 LLM 分析）；头部 ⟳ 刷新；点击按钮刷新 + ping；失败显示 `jira-error` 提示条。
 
-### LLM 分析与评论（点击待办）
+### Agent 会话分析（点击待办 → 分析 + 评论）
 
 - **配置**：工程根 `llm.config.json`（`provider` / `model`，已 gitignore，模板见 `llm.config.example.json`），host 从 bundle 目录向上逐级查找（同 jira.config.json 模式）。
-- **端点**：`/hello/jira/analyze`（args: `{ key }`）→ host 取 issue 详情（summary + description + 已有评论，ADF 转文本）→ 调 `ctx.llm.stream`（`inject` 不声明，`ctx.get('llm')` 可选获取，缺失时返回错误）→ 返回 `{ key, summary, analysis }`。LLM 调用用 `BlockAssembler` 聚合 `text-delta`，`finish.kind === 'error' | 'aborted'` 视为失败。
+- **端点**：`/hello/jira/analyze`（args: `{ key }`）→ 预检（缺 provider/model → `llm-not-configured`；`fetchJiraIssueSummary` 轻量取 summary 并校验 Jira 配置与 issue 存在）→ `agents.create` 新会话（`jira-<uuid>`，agentOptions 取配置）→ `workspaceRegistry.create(插件包根目录, 'Jira 分析')` + `attachSession`（与「新闻头条」并列的独立分组）→ `sessionTitle.rename`「分析 KEY HH:mm:ss」→ `followup`（要求先调**全局可见**的 `jira_get_issue` 工具取完整详情；禁止写操作工具）→ **立即返回 `{ sessionId }`**，会话后台运行。
+- **结果回传（长轮询）**：`agent.whenIdle()` 等静止（模型失败也 resolve，须扫日志判定）→ 从 `session.events`（followup 前 `seq` 边界之后）折叠最终文本（`assistant/message` 非空 text 逐条覆盖；`turn/end` reason 为 error/aborted 视为失败）→ `emit('jira/analysis-done', [{ key, summary, analysis, sessionId }])` 经 `events/poll` 推送；失败 → `emit('jira/analysis-failed', [{ sessionId, message }])`。会话**不 dispose**（dispose 会删会话），保留在左侧「Jira 分析」工作区供查看 / 续聊。
 - **端点**：`/hello/jira/comment`（args: `{ key, text }`）→ `POST /rest/api/3/issue/{key}/comment`，body 用 ADF（`{ type: 'doc', ... }`）→ 返回 `{ added: true }`。
-- **客户端**：点击待办项 → 展示「LLM 正在分析…」→ 分析面板（issue 标题 + 分析文本）→ 卡片内「添加到评论 / 取消」按钮 → 同意则调 comment 并显示「✅ 已添加到 Jira 评论」。
+- **客户端**：点击待办项 → 「Agent 正在分析…」（附会话提示）→ 收到 `jira/analysis-done`（仅 `sessionId` 匹配最近一次发起且未决的请求时生效，防旧会话覆盖）→ 分析面板（issue 标题 + 分析文本）→ 卡片内「添加到评论 / 取消」按钮 → 同意则调 comment 并显示「✅ 已添加到 Jira 评论」。
 
 ### 关键约束（踩过的坑）
 
@@ -96,6 +97,8 @@ dsh 的标准事件转发（`ctx.remote.$on`）对自定义事件不适用：`re
 3. 客户端长轮询循环里 **`inflight` 必须在 await 后复位**，否则循环只跑一轮就停（曾因此 bug）。
 4. 浏览器端 `rpc.open`（流式）只在 worker 隧道存在，served web app 的自建通道是请求-响应。
 5. Jira Cloud `/rest/api/2/search` 已移除（410），须用 `/rest/api/3/search/jql`。
+6. Agent 会话失败不抛给 `whenIdle`（模型失败时静默 resolve）→ 失败只能从日志判定：扫 `turn/end` reason（error/aborted）或听 `agent/error` 事件。
+7. `handle.dispose()` 会**删除会话**（左侧工作区条目随之消失）→ 要让会话留在左侧可见就**不要 dispose**（新闻 / 分析会话都如此）。
 
 ## UI 插槽（客户端）
 
@@ -123,6 +126,7 @@ node --check lib/host.js            # 宿主 bundle 语法检查
 2. Web 端右下角出现「我的待办」悬浮卡片；点击底部 hello 按钮后宿主日志追加 `client ping: browser`，按钮短暂显示 `pong from host`，**1 秒后恢复 `hello world x{n}`（计数 +1）**。
 3. 宿主每 5 秒（无需操作）Web 端按钮上方出现新的气泡条 `hello/notice: host is alive at ...`（**只保留最新一条**）—— 长轮询推送链路打通。
 4. 配置 Jira 凭据（工程根 `jira.config.json` 或 `$DSH_HOME/settings.yaml` 的 `jira:` 节）后，卡片展示「我的待办」列表（每项含类型徽章 + 摘要 + `KEY · 状态`）；未配置时出现 `Jira: jira-not-configured` 提示条。
+5. 配置 `llm.config.json` 后点击待办项：面板「Agent 正在分析…」+ 左侧工作区出现「Jira 分析」分组与「分析 KEY HH:mm:ss」会话 → 宿主日志 `emit: jira/analysis-done` 后面板展示分析 + 「添加到评论 / 取消」→ 同意则显示「✅ 已添加到 Jira 评论」；未配置 LLM 时面板立即显示 `llm-not-configured`。
 
 ## 改动纪律
 

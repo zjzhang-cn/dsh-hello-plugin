@@ -13,8 +13,8 @@ src/host/                  宿主半区（Node Cordis 插件）
   constants.ts             常量（name、inject、POLL_TIMEOUT_MS、颜色映射）
   errors.ts                错误类（JiraConfigError、rpcFailure）
   config.ts                工程配置文件加载（jira.config.json / llm.config.json）
-  jira.ts                  Jira API 工具（fetchJiraTodos、fetchJiraIssueDetail、addJiraComment）
-  llm.ts                   LLM 分析（generateLlmAnalysis）
+  jira.ts                  Jira API 工具（fetchJiraTodos、fetchJiraIssueDetail、fetchJiraIssueSummary、addJiraComment）
+  jira-agent.ts            Jira 分析 Agent 会话（runJiraAnalysisSession：建会话 → 等静止 → 折叠最终文本）
   news.ts                  Google News 工具（fetchGoogleNews、installGoogleNewsTool）
 src/client/                客户端半区（浏览器）
   index.ts                 入口：注册 HelloPill 到 shell.overlay 插槽
@@ -56,6 +56,7 @@ node --check lib/host.js           # 宿主 bundle 语法检查
 - `typertGateway.registerRemoteEvents` 是单例 → 自定义事件用长轮询。
 - 客户端长轮询循环里 **`inflight` 必须在 await 后复位**，否则循环只跑一轮就停。
 - Jira Cloud `/rest/api/2/search` 已移除（410），须用 `/rest/api/3/search/jql`。
+- Agent 会话失败不抛给 `whenIdle`（模型失败静默 resolve）→ 从日志判定：扫 `turn/end` reason 或听 `agent/error`；`handle.dispose()` 会删除会话（左栏条目消失），要保留可见就不 dispose。
 - 工程内配置文件（`jira.config.json`、`llm.config.json`）已 gitignore，模板文件（`*.example.json`）可提交。
 
 ## Type safety and documentation

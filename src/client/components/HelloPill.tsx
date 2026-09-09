@@ -9,6 +9,20 @@ import { NewsButton } from './NewsButton'
 import { HelloButton } from './HelloButton'
 import { Panel } from './Panel'
 
+/** 宿主推送的分析完成事件 payload（jira/analysis-done）。 */
+interface AnalysisDonePayload {
+  key: string
+  summary: string
+  analysis: string
+  sessionId: string
+}
+
+/** 宿主推送的分析失败事件 payload（jira/analysis-failed）。 */
+interface AnalysisFailedPayload {
+  sessionId: string
+  message: string
+}
+
 interface HelloPillProps {
   connection: ConnectionHandle
 }
@@ -25,6 +39,10 @@ export function HelloPill({ connection }: HelloPillProps): React.ReactElement {
   const [analysis, setAnalysis] = React.useState<JiraAnalysis | null>(null)
   const [analysisLoading, setAnalysisLoading] = React.useState(false)
   const [analysisError, setAnalysisError] = React.useState<string | null>(null)
+  const [analysisSessionId, setAnalysisSessionId] = React.useState<string | null>(null)
+  // 最近一次发起且未决的分析会话 id：宿主推送的 done/failed 事件只在 sessionId 匹配时生效，
+  // 防止旧会话的结果覆盖新一次点击（同一待办被点击多次时按会话区分）
+  const pendingAnalysisSessionRef = React.useRef<string | null>(null)
   const [commentState, setCommentState] = React.useState<'idle' | 'submitting' | 'added' | 'error'>('idle')
   const [commentError, setCommentError] = React.useState<string | null>(null)
   const [newsSession, setNewsSession] = React.useState<string | null>(null)
@@ -54,16 +72,31 @@ export function HelloPill({ connection }: HelloPillProps): React.ReactElement {
     setAnalysisLoading(true)
     setAnalysisError(null)
     setAnalysis(null)
+    setAnalysisSessionId(null)
+    pendingAnalysisSessionRef.current = null
     setCommentState('idle')
     setCommentError(null)
     void connection.rpc
       .call('/hello', 'jira/analyze', { args: { key: todo.key } })
       .then((result) => {
-        if (result.ok) setAnalysis(result.value as JiraAnalysis)
-        else setAnalysisError(`${result.error.code}: ${result.error.message}`)
+        if (result.ok) {
+          // 宿主已创建 Agent 会话（左侧「Jira 分析」工作区可见），保持 loading，
+          // 分析结果 / 失败随后经 events/poll 事件推送
+          const sessionId = (result.value as { sessionId?: unknown }).sessionId
+          const id = typeof sessionId === 'string' ? sessionId : null
+          pendingAnalysisSessionRef.current = id
+          setAnalysisSessionId(id)
+        } else {
+          pendingAnalysisSessionRef.current = null
+          setAnalysisError(`${result.error.code}: ${result.error.message}`)
+          setAnalysisLoading(false)
+        }
       })
-      .catch((error: unknown) => setAnalysisError(String(error)))
-      .finally(() => setAnalysisLoading(false))
+      .catch((error: unknown) => {
+        pendingAnalysisSessionRef.current = null
+        setAnalysisError(String(error))
+        setAnalysisLoading(false)
+      })
   }
 
   const addComment = (): void => {
@@ -87,6 +120,8 @@ export function HelloPill({ connection }: HelloPillProps): React.ReactElement {
 
   const cancelAnalysis = (): void => {
     setAnalysis(null)
+    pendingAnalysisSessionRef.current = null
+    setAnalysisSessionId(null)
     setCommentState('idle')
     setCommentError(null)
   }
@@ -120,9 +155,33 @@ export function HelloPill({ connection }: HelloPillProps): React.ReactElement {
         const result = await connection.rpc.call('/hello', 'events/poll', { args: {} })
         inflight = false
         if (!cancelled && result.ok && Array.isArray(result.value)) {
-          const incoming = (result.value as { event: string; args: unknown[] }[])
-            .map((item) => `${item.event}: ${item.args.join(' ')}`)
-          if (incoming.length > 0) setEvents([incoming[incoming.length - 1] ?? ''])
+          const incoming = result.value as { event: string; args: unknown[] }[]
+          // 按事件名分发：分析结果/失败事件消费掉（匹配未决 sessionId），其余维持气泡（只留最新一条）
+          let bubble: string | null = null
+          for (const item of incoming) {
+            if (item.event === 'jira/analysis-done' || item.event === 'jira/analysis-failed') {
+              const args = item.args[0] as Partial<AnalysisDonePayload & AnalysisFailedPayload> | undefined
+              const sid = typeof args?.sessionId === 'string' ? args.sessionId : null
+              if (sid === null || sid !== pendingAnalysisSessionRef.current) continue // 旧会话事件，丢弃
+              pendingAnalysisSessionRef.current = null
+              setAnalysisSessionId(null)
+              setAnalysisLoading(false)
+              if (item.event === 'jira/analysis-done') {
+                setAnalysis({
+                  key: args?.key ?? '',
+                  summary: args?.summary ?? '',
+                  analysis: args?.analysis ?? '',
+                })
+              } else {
+                setAnalysisError(args?.message !== undefined && args.message !== ''
+                  ? args.message
+                  : 'Agent 分析失败')
+              }
+              continue
+            }
+            bubble = `${item.event}: ${item.args.join(' ')}`
+          }
+          if (bubble !== null) setEvents([bubble])
         }
       } catch {
         inflight = false
@@ -219,6 +278,9 @@ export function HelloPill({ connection }: HelloPillProps): React.ReactElement {
             analysis,
             analysisLoading,
             analysisError,
+            sessionHint: analysisSessionId === null
+              ? null
+              : `会话 ${analysisSessionId} 已创建，在左侧「Jira 分析」工作区可查看实时过程`,
             commentState,
             commentError,
             onAddComment: addComment,

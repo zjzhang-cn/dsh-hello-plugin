@@ -112,6 +112,23 @@ export async function fetchJiraIssueDetail(settings: JiraSettings, key: string):
   }
 }
 
+/**
+ * 轻量读取单个 issue 的 key + summary（不取 description/comments）。
+ * 用于分析会话创建前的预检（校验 Jira 配置与 issue 存在）并为会话标题 / 任务消息提供摘要。
+ */
+export async function fetchJiraIssueSummary(settings: JiraSettings, key: string): Promise<Pick<JiraIssueDetail, 'key' | 'summary'>> {
+  assertJiraSettings(settings)
+  const client = createJiraClient(settings)
+  const issue = await client.issues.getIssue({
+    issueIdOrKey: key,
+    fields: ['summary'],
+  })
+  return {
+    key: issue.key ?? key,
+    summary: issue.fields?.summary ?? '',
+  }
+}
+
 /** 往指定 issue 添加一条评论（ADF 格式 body）。 */
 export async function addJiraComment(settings: JiraSettings, key: string, text: string): Promise<void> {
   assertJiraSettings(settings)
