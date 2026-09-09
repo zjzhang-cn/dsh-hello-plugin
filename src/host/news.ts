@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { connect as tcpConnect, type Socket } from 'node:net'
 import { connect as tlsConnect } from 'node:tls'
+import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { GoogleNewsItem } from './types'
 
 /** 直连（无代理）fetch 超时，与改动前一致。 */
@@ -360,12 +361,11 @@ export async function fetchGoogleNews(locale: string): Promise<GoogleNewsItem[]>
 
 /**
  * 在 Agent 作用域内注册 google_news 工具。
- * 从 agentCtx 调用 ctx.tools.register 走 ScopedLayers —— 仅该会话的 Agent 可见，
- * 不污染全局工具表。agentCtx 的类型不含 tools 声明（core/tools 的模块扩展未引入），
- * 这里用结构化宽松类型直传（宿主 bundle dts: false，运行时无碍）。
+ * 从 agentCtx 调用 ctx.tools.register（官方 dsh-tools 的 ToolDefinition 类型），
+ * 走 ScopedLayers —— 仅该会话的 Agent 可见，不污染全局工具表。
  */
 export function installGoogleNewsTool(agentCtx: Context): void {
-  ;(agentCtx as unknown as { tools: { register(definition: object): () => void } }).tools.register({
+  const def: ToolDefinition = {
     name: 'google_news',
     description: '获取 Google News 最新新闻列表（标题 + 链接 + 发布时间）。用于了解当前热点新闻。',
     parameters: {
@@ -392,5 +392,6 @@ export function installGoogleNewsTool(agentCtx: Context): void {
       const locale = typeof raw === 'string' && raw !== '' ? raw : 'zh-CN'
       return fetchGoogleNews(locale)
     },
-  })
+  }
+  agentCtx.tools.register(def)
 }

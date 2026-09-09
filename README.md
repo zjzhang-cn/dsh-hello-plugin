@@ -267,6 +267,8 @@ ssh -L 3080:127.0.0.1:3080 <remote-host>
 
 ## 开发日志
 
+- **2026-09-09 修复 Session 事件读取 API 版本错位** — 运行时 `snapshotEvents` 不存在（dev 跑 harness 源码，Session 是 `events` 快照 getter；发布 rc.1 类型才标 `snapshotEvents`）→ 新增特性探测辅助优先走 `events.slice(boundary)`、回退 `snapshotEvents(boundary)`；详见 [开发日志](docs/dev-log.md)。
+- **2026-09-09 服务类型改用官方 @deepseek-ai/* 包** — 宿主不再手写 agents/workspace/session/tools 的结构接口与 cast：新增 peer/dev 类型依赖 `dsh-agent / dsh-session / dsh-tools / dsh-workspace`（连同 `dsh-session-title`），`import type` 后借 cordis Context 模块增强直接用 `ctx.agents/tools/sessionTitle/workspaceRegistry` 官方类型；事件折叠改 SessionEvent 判别联合；工具定义改 `ToolDefinition` 校验；全部 type-only，产物无新增运行时依赖；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-09 README 新增「Jira 业务流程一览」** — 以四条链路为主线整理 Jira 业务（前提配置 → 浏览待办 → 点击发起 Agent 会话分析并异步回传确认评论 → 会话内 jira_* 工具操作），附错误语义速查；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-09 Jira 分析改为 Agent 会话并推回前端** — `jira/analyze` 不再直连 `ctx.llm.stream`：发起新会话（`jira-<uuid>`）归入独立「Jira 分析」工作区（左侧可见、标题「分析 KEY HH:mm:ss」），Agent 经全局 `jira_get_issue` 工具取详情后分析；端点立即返回 `{ sessionId }`，完成后宿主经 `events/poll` 推送 `jira/analysis-done` / `jira/analysis-failed`，客户端按 sessionId 匹配落面板、沿用「添加到评论」确认；删除 `src/host/llm.ts`（新增 `jira-agent.ts`）；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-01 README 新增「验证过的 dsh 能力」章节** — 概要整理本插件实际使用（10 项）与刻意未用（3 项）的 dsh 能力，指向详尽的 `docs/hello-plugin-capabilities.md` 与能力全目录；结构表补充 capabilities 文档；详见 [开发日志](docs/dev-log.md)。

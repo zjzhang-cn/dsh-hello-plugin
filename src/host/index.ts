@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
+import type { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import type { ConnectionRpcResult } from '@deepseek-ai/dsh-client-connection'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { SessionId } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-session-title'
+import type { WorkspaceRegistry } from '@deepseek-ai/dsh-workspace'
 import z from '@deepseek-ai/schemastery'
 import { name, inject, POLL_TIMEOUT_MS } from './constants'
 import { loadProjectJiraConfig, loadProjectLlmConfig } from './config'
@@ -120,6 +124,7 @@ export function apply(ctx: Context): void {
 			// 后台驱动分析会话（不阻塞 RPC）；完成后/失败时经 emit 推送给前端
 			void runJiraAnalysisSession(ctx, { llmConfig, sessionId, key, summary })
 				.then((result) => {
+					// 分析会话完成，通知前端
 					logger.info('jira analysis done:', result.key, result.sessionId)
 					emit('jira/analysis-done', [{
 						key: result.key,
@@ -162,21 +167,13 @@ export function apply(ctx: Context): void {
 			if (llmConfig.provider === undefined || llmConfig.model === undefined) {
 				return rpcFailure('llm-not-configured', 'llm.config.json 未配置 provider/model')
 			}
-			// 获取 agents 服务
-			const agents = ctx.get('agents')
+			// 获取 agents 服务（官方 dsh-agent 类型）
+			const agents = ctx.get('agents') as AgentRegistry | undefined
 			if (agents === undefined) return rpcFailure('agents-unavailable', 'agents 服务不可用')
 			const sessionId = 'news-' + randomUUID()
 			try {
-				// 获取 workspaceRegistry 服务
-				const workspaceRegistry = ctx.get('workspaceRegistry') as {
-					create(path: string, title?: string): Promise<{
-						readonly id: string
-						readonly path: string
-						readonly title: string
-						setTitle(title: string): Promise<void>
-						attachSession(sessionId: string): Promise<void>
-					}>
-				} | undefined
+				// 获取 workspaceRegistry 服务（官方 dsh-workspace 类型）
+				const workspaceRegistry = ctx.get('workspaceRegistry') as WorkspaceRegistry | undefined
 				// 工作目录，使用 process.cwd() 获取当前工作目录
 				const cwd = process.cwd()
 				// 创建 workspace，如果 workspaceRegistry 不可用，则返回 undefined
@@ -197,13 +194,12 @@ export function apply(ctx: Context): void {
 						installGoogleNewsTool(agentCtx)
 					},
 				})
-				if (workspace !== undefined) await workspace.attachSession(sessionId)
+				if (workspace !== undefined) await workspace.attachSession(sessionId as SessionId)
 				const now = new Date()
 				// 获取当前时间的本地化字符串，格式为“时:分:秒”，不使用 12 小时制,
 				const stamp = now.toLocaleTimeString('zh-CN', { hour12: false });
-				// 重命名 agent 会话的标题为“获取新闻 + 时间戳”
-				(ctx as unknown as { sessionTitle: { rename(session: object, title: string): unknown } })
-					.sessionTitle.rename(handle.agent.session, `获取新闻 ${stamp}`)
+				// 重命名 agent 会话的标题为“获取新闻 + 时间戳”（sessionTitle 由 dsh-session-title 增强提供类型）
+				ctx.sessionTitle.rename(handle.agent.session, `获取新闻 ${stamp}`)
 				// 发送一条用户消息，要求使用 google_news 工具获取最新 Google 新闻，并用简洁的中文总结当前最重要的 5 条新闻，每条附链接	
 				handle.agent.followup(createUserMessage({
 					content: [{

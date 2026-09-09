@@ -2,6 +2,27 @@
 
 > 规则：**每次功能 / BUG 修改 / 实现都要记录开发日志。** 记录在 `docs/dev-log.md`，一次功能或修复一条记录。按时间倒序（最新在上）。
 
+## 2026-09-09 — 修复 Session 事件读取 API 版本错位（events vs snapshotEvents）
+
+**类型**：BUG 修复
+**涉及**：`src/host/jira-agent.ts`、`README.md`、`docs/dev-log.md`
+**背景 / 问题**：官方类型化后按已发布 0.1.2-rc.1 的类型标注调用 `agent.session.snapshotEvents(boundary)`，运行时实测报 `snapshotEvents is not a function`——dev profile 跑的是 harness 工作区源码（packages/core/session 的 Session 提供 `get events(): readonly SessionEvent[]`，src/index.ts:557），并无 `snapshotEvents`；发布版 rc.1 类型与源码 API 错位（rc.1 标注 `snapshotEvents(from, to)`、无 `events` getter，装上的 devDep 即此版本）。
+**改动**：`src/host/jira-agent.ts` 新增 `snapshotEventsFrom(session, boundary)` 特性探测辅助：优先用 `events` 快照 getter（`events.slice(boundary)`，harness 源码运行面），其次回退 `snapshotEvents(boundary)`（rc.1 发布类型面），两者皆无则抛错。取事件范围语义一致（[boundary, 日志末尾)）。
+**验证**：`pnpm typecheck` / `pnpm build` / `node --check` 通过；dsh profile 实测分析会话正常完成并推送 `jira/analysis-done`。
+
+## 2026-09-09 — 服务类型改用官方 @deepseek-ai/* 包，删除手写结构接口与 cast
+
+**类型**：重构
+**涉及**：`package.json`、`pnpm-lock.yaml`、`src/host/jira-agent.ts`、`src/host/index.ts`、`src/host/jira-tools.ts`、`src/host/news.ts`、`CLAUDE.md`、`AGENTS.md`、`docs/dev-log.md`
+**背景 / 问题**：宿主为调用 harness 服务（agents / sessionTitle / workspaceRegistry / tools）手写了结构接口与大量类型强转（`AgentsServiceLike`、`AgentLike`、`SessionLike`、`SessionEventLike`、`ToolRegistry`、workspaceRegistry/sessionTitle 内联结构、`as never` 等），而这些类型 harness 均已发布为 `@deepseek-ai/*` npm 包并提供 cordis `Context` 模块增强。
+**改动**：
+- `package.json`：peer + dev 各加 `@deepseek-ai/dsh-agent | dsh-session | dsh-tools | dsh-workspace`（与既有 `^0.1.2-alpha.2` 写法一致，lock 解析 0.1.2-rc.1；`dsh-session-title` 此前已加）。全部 **type-only** 使用，无新增运行时依赖。
+- `src/host/jira-agent.ts`：删除 4 个手写结构接口，改 `import type` 官方 `AgentRegistry` / `SessionEvent` / `SessionId` / `WorkspaceRegistry` / `ContentBlock`（dsh-llm）；服务获取按 dsh-agent-teams 惯例 `ctx.get(...) as 官方类型 | undefined`；`agents.create` 的 `sessionId as never` → `sessionId as SessionId`（brand，仅类型层）；`sessionTitle.rename` 直调（官方增强类型）；事件折叠改用 **SessionEvent 判别联合**（`turn/end` 的 `reason`、`assistant/message` 的 `message.content` 不再逐层 `as` 收窄）；会话日志读取从 `session.events.slice(boundary)` 改为 rc.1 实际 API `session.snapshotEvents(boundary)`。
+- `src/host/index.ts`：news/start 的 workspaceRegistry 内联结构 → `WorkspaceRegistry` 官方类型；sessionTitle 结构 cast → `ctx.sessionTitle.rename(...)` 直调（`import type {} from '@deepseek-ai/dsh-session-title'` 载入增强）；`attachSession` 补 `SessionId` brand 断言。
+- `src/host/jira-tools.ts` / `src/host/news.ts`：删除 `ToolRegistry` 接口与 `jiraToolRegistry`/agentCtx 结构 cast，6+1 个工具定义改为 `ToolDefinition` 数组/标注后 `ctx.tools.register(...)`（工具 schema 字面量经官方类型校验，运行时语义不变）。
+- 保留的本地址义：Jira/新闻领域模型、长轮询信封（PendingEvent/HelloEvent）、组件 props 等 —— dsh 无对应物。
+**验证**：`pnpm typecheck` / `pnpm build` 通过（判别收窄与 ToolDefinition 字面量零报错）；`node --check` 通过；`lib/host.js` 对五个新包无运行时 import（仅注释残留）；运行期行为不变，实测步骤同 README「开发与验证」。
+
 ## 2026-09-09 — README 新增「Jira 业务流程一览」章节
 
 **类型**：文档

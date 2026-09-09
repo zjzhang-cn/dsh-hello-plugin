@@ -27,7 +27,7 @@ cordis.patch.yml         bundle patch 层：把宿主插件行插入启动图（
 dev.patch.yml            开发用 patch（绝对路径，已 gitignore）
 jira.config.example.json Jira 配置模板（含占位符，可提交）；真实凭据放 jira.config.json（已 gitignore）
 llm.config.example.json  LLM 配置模板（provider/model，可提交）；真实配置放 llm.config.json（已 gitignore）
-package.json             包清单：exports 两个半区 + dsh 集成字段（dsh-llm 为运行时依赖）
+package.json             包清单：exports 两个半区 + dsh 集成字段（dsh-llm 为运行时依赖；dsh-agent/dsh-session/dsh-tools/dsh-workspace/dsh-session-title 为官方类型依赖，peer+dev、type-only）
 docs/
   dev-log.md                        开发日志（每次功能/修复必记，最新在上）
   hello-plugin-capabilities.md      本插件 dsh 能力全景（已使用/未使用清单）
@@ -59,7 +59,7 @@ docs/
 - **客户端半区**：`exports["./client"]` → `lib/client.js`，由 `dsh.client.platform = "web"` 声明。`src/client/index.ts` 经 `pnpm build` 编译和封装；浏览器端通过 `window.__ModuleLoader__.load({ id, factory })` 注册工厂；**id 必须等于包名**（图行 id）。
 - **patch 层**：`dsh.bundle.patch` → `cordis.patch.yml`。客户端半区**不写进** patch —— 由扫描发现。
 
-> 两个半区都已是 TypeScript：`tsconfig.host.json`（node 类型）+ `tsconfig.client.json`（DOM 类型），共用一份 `tsdown.config.ts`（数组配置：host → node ESM，client → ModuleLoader 工厂）。宿主 bundle 内联 schemastery（运行时构建设置 schema），`@deepseek-ai/dsh-llm` 标记为 external（其内部用 `createRequire` 读自身 package.json，内联会路径错位），运行时从 node_modules 解析（dsh-llm 是 harness 核心服务，始终挂载）。其余依赖均为 type-only，被擦除后产物无运行时裸 import，可直接以绝对路径加载。
+> 两个半区都已是 TypeScript：`tsconfig.host.json`（node 类型）+ `tsconfig.client.json`（DOM 类型），共用一份 `tsdown.config.ts`（数组配置：host → node ESM，client → ModuleLoader 工厂）。宿主 bundle 内联 schemastery（运行时构建设置 schema），`@deepseek-ai/dsh-llm` 标记为 external（其内部用 `createRequire` 读自身 package.json，内联会路径错位），运行时从 node_modules 解析（dsh-llm 是 harness 核心服务，始终挂载）。agents / sessionTitle / workspaceRegistry / tools 等服务类型直接引用官方 `@deepseek-ai/dsh-agent | dsh-session | dsh-tools | dsh-workspace | dsh-session-title`（各包对 cordis `Context` 做模块增强，`import type` 后 `ctx.*` 即带类型；均为 type-only，被擦除后产物无运行时裸 import，可直接以绝对路径加载）。
 
 ## 通信机制（本仓库实现的两条链路）
 

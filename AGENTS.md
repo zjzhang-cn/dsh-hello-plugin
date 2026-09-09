@@ -45,7 +45,7 @@ node --check lib/host.js           # 宿主 bundle 语法检查
 
 - **ESM only**。`"type": "module"`；内部模块相对导入用 `.ts`（`moduleResolution: Bundler`）。
 - **双面插件**：同一个包同时导出宿主半区（`exports["."]`）和客户端半区（`exports["./client"]`），由 `dsh.client.platform = "web"` 声明。
-- **宿主 bundle**：schemastery 内联；`@deepseek-ai/dsh-llm` 标记为 external（其内部用 `createRequire` 读自身 package.json，内联会路径错位）。
+- **宿主 bundle**：schemastery 内联；`@deepseek-ai/dsh-llm` 标记为 external（其内部用 `createRequire` 读自身 package.json，内联会路径错位）。agents / session / tools / workspace / session-title 五个官方包仅作类型依赖（cordis Context 模块增强，type-only），擦除后不入包。
 - **Registrations are effects**：所有注册通过 `ctx.effect()` / `ctx.on()`，保证卸载时自动回收。
 - **组件只靠 props 拿服务**：客户端组件通过 `slots.register` 的 inject 业务面接收 `connection` 等服务，永不引用模块级 `ctx`。
 - **开发日志（强制）**：每次功能 / BUG 修改 / 实现后，先向 `docs/dev-log.md` 补写记录（最新在上），再提交。
