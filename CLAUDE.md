@@ -29,6 +29,8 @@ jira.config.example.json Jira 配置模板（含占位符，可提交）；真�
 llm.config.example.json  LLM 配置模板（provider/model，可提交）；真实配置放 llm.config.json（已 gitignore）
 package.json             包清单：exports 两个半区 + dsh 集成字段（dsh-llm 为运行时依赖；dsh-agent/dsh-session/dsh-tools/dsh-workspace/dsh-session-title 为官方类型依赖，peer+dev、type-only）
 docs/
+  agent-capabilities.md             Agent 能力分析（create/handle/工具面/运行模式，以本插件为实证）
+  agent-plugin.md                   dsh AGENT 插件（@deepseek-ai/dsh-agent）包画像：registry/loop 分层、API、事件、源码地图
   dev-log.md                        开发日志（每次功能/修复必记，最新在上）
   hello-plugin-capabilities.md      本插件 dsh 能力全景（已使用/未使用清单）
   learning-path.md                  学习路径（按章节由简入深）

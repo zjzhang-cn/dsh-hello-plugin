@@ -2,6 +2,29 @@
 
 > 规则：**每次功能 / BUG 修改 / 实现都要记录开发日志。** 记录在 `docs/dev-log.md`，一次功能或修复一条记录。按时间倒序（最新在上）。
 
+## 2026-09-09 — 新增「dsh AGENT 插件」文档
+
+**类型**：文档
+**涉及**：`docs/agent-plugin.md`（新增）、`CLAUDE.md`、`AGENTS.md`、`README.md`、`docs/agent-capabilities.md`、`docs/dev-log.md`
+**背景 / 问题**：hello-plugin 一直在用 `ctx.agents`，但缺少对「它本身也是一个 Cordis 插件」（`@deepseek-ai/dsh-agent`）的独立说明 —— 注册表、句柄、initiator scope、agent/* 事件、与 agent-loop 的分层关系散落在 harness 源码与 README 里。
+**改动**：
+- 新建 `docs/agent-plugin.md`（9 节）：包定位（提供四样东西、零循环依赖）；**registry / agent-loop 双层架构**（create 委托注册的 factory、最小组合两者同挂、enter→announce 可回滚发布）；peer 依赖底座（session / llm / tools / scope / system-prompt / typert / cordis）解释 agentCtx 作用域现象；`ctx.agents` 服务 API 全表（create/resume/get/list/roots/isOwnedBy/register/enter/announce/withInitiator/setFactory）；Agent 控制面（dispose 副作用 = 删会话、followup/steer/inject/send/cancel/whenIdle 精确差别）；`agent/*` 事件插桩缝（pre-step / request-error / turn-stopping / status / inbox）；源码地图（src 各文件角色）；与 hello-plugin 的使用界面对照；学习下一步。
+- `docs/agent-capabilities.md` 头部补与本文的分工指针；CLAUDE.md / AGENTS.md 布局与 README 结构表补行；README 开发日志简述同步。
+**验证**：Markdown 渲染检查；peer 依赖表与 API 表核证 harness `packages/core/agent` 源码与官方 README，npm 包装内容核证 node_modules（含运行时 lib/index.js，hello-plugin 侧 type-only）。
+
+## 2026-09-09 — 新增「Agent 能力分析」文档
+
+**类型**：文档
+**涉及**：`docs/agent-capabilities.md`（新增）、`CLAUDE.md`、`AGENTS.md`、`README.md`、`docs/dev-log.md`
+**背景 / 问题**：capability-catalog（全目录）与 hello-plugin-capabilities（使用全景）都是清单式，缺一份聚焦 Agent 能力面的机制深潜，回答「一次 `agents.create()` 后 Agent 能做什么、怎么控制、还差什么」。
+**改动**：
+- 新建 `docs/agent-capabilities.md`，以新闻 / Jira 分析两类 Agent 会话与官方 `dsh-agent` 类型面为据分 8 节：
+  - 基本模型（Agent = 会话执行体，事件日志是唯一事实来源）、创建面 `CreateAgentOptions` 实证表（sessionId / meta.cwd / agentOptions / setup 已用；subagent fork / seed 未用）
+  - handle 操作面（followup / whenIdle 实证；cancel / steer / send / inject 未用）、工具面（全局 `jira_*` vs 作用域 `google_news` 两种注入对照）、两种运行模式（新闻 fire-and-forget vs Jira headless 回收）
+  - 未触达能力（jobs / goals / agentLoop / subagents / agentTeams / 会话数据层 / 模型治理）与潜在用途、踩坑清单、下一步学习建议
+- 文档间的分工说明放文档头部；CLAUDE.md / AGENTS.md 布局与 README 结构表补该文档行；README 开发日志简述同步。
+**验证**：Markdown 渲染检查；文档内引用的源码路径与既有文档风格一致。
+
 ## 2026-09-09 — dsh 依赖范围对齐已发布的 0.1.2-rc.1
 
 **类型**：重构 / 依赖维护

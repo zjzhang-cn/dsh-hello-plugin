@@ -146,6 +146,7 @@ export async function runJiraAnalysisSession(
 
 	// 记录事件边界后发任务：boundary 之后的事件才属于本次分析
 	const boundary = agent.session.seq
+	// 发送用户消息，触发 Jira 分析任务
 	agent.followup(createUserMessage({
 		content: [{ type: 'text' as const, text: buildTaskPrompt(key, summary) }],
 		source: { kind: 'plugin' as const, plugin: name },

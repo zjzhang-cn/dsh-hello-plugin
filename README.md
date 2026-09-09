@@ -29,6 +29,8 @@
 | `cordis.patch.yml` | bundle patch 层：把宿主插件行插入启动图（boot graph）的插件列表 |
 | `.vscode/launch.json` | VS Code 调试配置：在 deepseek-harness 中以本地 `dev.patch.yml` 启动 dsh Web |
 | `package.json` | 包清单，声明两个半区的导出与 dsh 集成字段 |
+| `docs/agent-capabilities.md` | Agent 能力分析：create/handle/工具面/运行模式深潜（以本插件两类 Agent 会话为实证，附未触达能力与踩坑） |
+| `docs/agent-plugin.md` | dsh AGENT 插件（`@deepseek-ai/dsh-agent`）包画像：registry/loop 分层架构、依赖底座、服务 API、agent/* 事件、源码地图 |
 | `docs/dev-log.md` | 开发日志：每次功能 / BUG 修改 / 实现的记录（最新在上） |
 | `docs/hello-plugin-capabilities.md` | 本插件 dsh 能力全景：已使用 / 未使用清单（逐项标注源码位置与潜在用途） |
 | `docs/learning-path.md` | 学习路径：按章节由简入深的学习路线 |
@@ -267,6 +269,8 @@ ssh -L 3080:127.0.0.1:3080 <remote-host>
 
 ## 开发日志
 
+- **2026-09-09 新增「dsh AGENT 插件」文档** — 新建 `docs/agent-plugin.md`：`ctx.agents` 本体（`@deepseek-ai/dsh-agent`）的包画像 —— registry 与 agent-loop 双层架构、peer 依赖底座、服务/句柄 API、agent/* 事件插桩缝、源码地图与 hello-plugin 使用界面对照；CLAUDE.md / AGENTS.md 布局与 README 结构表同步；详见 [开发日志](docs/dev-log.md)。
+- **2026-09-09 新增「Agent 能力分析」文档** — 新建 `docs/agent-capabilities.md`：以新闻/Jira 分析两类 Agent 会话实证，深潜 Agent 能力面（create 可配项、handle 操作面、全局 vs 作用域工具、两种运行模式、未触达能力与踩坑清单），并同步 CLAUDE.md / AGENTS.md 布局与 README 结构表；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-09 dsh 依赖范围对齐 0.1.2-rc.1** — `@deepseek-ai/dsh-*` 十个包的 peer + dev 依赖范围由 `^0.1.2-alpha.2` 更新为 `^0.1.2-rc.1`（与 dsh 已发布版本面一致，lock 解析不变），`pnpm install` 同步 lockfile；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-09 修复 Session 事件读取 API 版本错位** — 运行时 `snapshotEvents` 不存在（dev 跑 harness 源码，Session 是 `events` 快照 getter；发布 rc.1 类型才标 `snapshotEvents`）→ 新增特性探测辅助优先走 `events.slice(boundary)`、回退 `snapshotEvents(boundary)`；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-09 服务类型改用官方 @deepseek-ai/* 包** — 宿主不再手写 agents/workspace/session/tools 的结构接口与 cast：新增 peer/dev 类型依赖 `dsh-agent / dsh-session / dsh-tools / dsh-workspace`（连同 `dsh-session-title`），`import type` 后借 cordis Context 模块增强直接用 `ctx.agents/tools/sessionTitle/workspaceRegistry` 官方类型；事件折叠改 SessionEvent 判别联合；工具定义改 `ToolDefinition` 校验；全部 type-only，产物无新增运行时依赖；详见 [开发日志](docs/dev-log.md)。

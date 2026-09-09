@@ -25,6 +25,8 @@ lib/client.js              pnpm build 生成的客户端 bundle（ModuleLoader �
 tsdown.config.ts           双半区 bundle 配置（host: node ESM；client: ModuleLoader 工厂）
 cordis.patch.yml           bundle patch 层：宿主插件行插入启动图
 dev.patch.yml              开发用 patch（绝对路径，已 gitignore）
+docs/agent-capabilities.md     Agent 能力分析（create/handle/工具面/运行模式，以本插件为实证）
+docs/agent-plugin.md           dsh AGENT 插件（@deepseek-ai/dsh-agent）包画像：registry/loop 分层、API、事件、源码地图
 docs/dev-log.md            开发日志（每次功能/修复必记，最新在上）
 docs/hello-plugin-capabilities.md   本插件 dsh 能力全景（已使用/未使用清单）
 docs/learning-path.md      学习路径（按章节由简入深）
