@@ -10,40 +10,40 @@ importers:
     dependencies:
       jira.js:
         specifier: ^5.4.0
-        version: 5.4.0(debug@4.4.3)
+        version: 5.4.0
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: ^4.0.2
         version: 4.0.2
       '@deepseek-ai/dsh-agent':
-        specifier: ^0.1.2-alpha.2
+        specifier: ^0.1.2-rc.1
         version: 0.1.2-rc.1(6f833cf90b9dd3f0d529840b1aebfb48)
       '@deepseek-ai/dsh-client-connection':
-        specifier: ^0.1.2-alpha.2
+        specifier: ^0.1.2-rc.1
         version: 0.1.2-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.2-rc.1(@deepseek-ai/cordis@4.0.2))
       '@deepseek-ai/dsh-client-ui-layout':
-        specifier: ^0.1.2-alpha.2
+        specifier: ^0.1.2-rc.1
         version: 0.1.2-rc.1(@deepseek-ai/cordis@4.0.2)
       '@deepseek-ai/dsh-client-ui-renderer':
-        specifier: ^0.1.2-alpha.2
+        specifier: ^0.1.2-rc.1
         version: 0.1.2-rc.1(@deepseek-ai/cordis@4.0.2)(react@18.3.1)
       '@deepseek-ai/dsh-llm':
-        specifier: ^0.1.2-alpha.2
+        specifier: ^0.1.2-rc.1
         version: 0.1.2-rc.1(@deepseek-ai/cordis@4.0.2)
       '@deepseek-ai/dsh-session':
-        specifier: ^0.1.2-alpha.2
+        specifier: ^0.1.2-rc.1
         version: 0.1.2-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.2-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.2-rc.1(@deepseek-ai/cordis@4.0.2)))
       '@deepseek-ai/dsh-session-title':
-        specifier: ^0.1.2-alpha.2
+        specifier: ^0.1.2-rc.1
         version: 0.1.2-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-agent@0.1.2-rc.1(6f833cf90b9dd3f0d529840b1aebfb48))(@deepseek-ai/dsh-brand@0.1.2-rc.1(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-invariants@0.1.2-rc.1(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-llm@0.1.2-rc.1(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session-projection@0.1.2-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-session@0.1.2-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.2-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.2-rc.1(@deepseek-ai/cordis@4.0.2)))))(@deepseek-ai/dsh-session@0.1.2-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.2-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.2-rc.1(@deepseek-ai/cordis@4.0.2))))
       '@deepseek-ai/dsh-settings':
-        specifier: ^0.1.2-alpha.2
+        specifier: ^0.1.2-rc.1
         version: 0.1.2-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.2-rc.1(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-invariants@0.1.2-rc.1(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session@0.1.2-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.2-rc.1(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.2-rc.1(@deepseek-ai/cordis@4.0.2))))(@deepseek-ai/schemastery@3.18.2)
       '@deepseek-ai/dsh-tools':
-        specifier: ^0.1.2-alpha.2
+        specifier: ^0.1.2-rc.1
         version: 0.1.2-rc.1(de5e1ff2d608fbe22667925341ad1dfc)
       '@deepseek-ai/dsh-workspace':
-        specifier: ^0.1.2-alpha.2
+        specifier: ^0.1.2-rc.1
         version: 0.1.2-rc.1(c4f266c8456c2e5dc1e1d3e663271a2c)
       '@deepseek-ai/schemastery':
         specifier: ^3.18.2
@@ -1107,9 +1107,9 @@ snapshots:
 
   asynckit@0.4.0: {}
 
-  axios@1.20.0(debug@4.4.3):
+  axios@1.20.0:
     dependencies:
-      follow-redirects: 1.16.0(debug@4.4.3)
+      follow-redirects: 1.16.0
       form-data: 4.0.6
       https-proxy-agent: 5.0.1
       proxy-from-env: 2.1.0
@@ -1173,9 +1173,7 @@ snapshots:
     optionalDependencies:
       picomatch: 4.0.7
 
-  follow-redirects@1.16.0(debug@4.4.3):
-    optionalDependencies:
-      debug: 4.4.3
+  follow-redirects@1.16.0: {}
 
   form-data@4.0.6:
     dependencies:
@@ -1232,9 +1230,9 @@ snapshots:
 
   import-without-cache@0.4.0: {}
 
-  jira.js@5.4.0(debug@4.4.3):
+  jira.js@5.4.0:
     dependencies:
-      axios: 1.20.0(debug@4.4.3)
+      axios: 1.20.0
       mime-types: 2.1.35
       zod: 4.5.4
     transitivePeerDependencies:

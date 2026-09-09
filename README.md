@@ -267,6 +267,7 @@ ssh -L 3080:127.0.0.1:3080 <remote-host>
 
 ## 开发日志
 
+- **2026-09-09 dsh 依赖范围对齐 0.1.2-rc.1** — `@deepseek-ai/dsh-*` 十个包的 peer + dev 依赖范围由 `^0.1.2-alpha.2` 更新为 `^0.1.2-rc.1`（与 dsh 已发布版本面一致，lock 解析不变），`pnpm install` 同步 lockfile；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-09 修复 Session 事件读取 API 版本错位** — 运行时 `snapshotEvents` 不存在（dev 跑 harness 源码，Session 是 `events` 快照 getter；发布 rc.1 类型才标 `snapshotEvents`）→ 新增特性探测辅助优先走 `events.slice(boundary)`、回退 `snapshotEvents(boundary)`；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-09 服务类型改用官方 @deepseek-ai/* 包** — 宿主不再手写 agents/workspace/session/tools 的结构接口与 cast：新增 peer/dev 类型依赖 `dsh-agent / dsh-session / dsh-tools / dsh-workspace`（连同 `dsh-session-title`），`import type` 后借 cordis Context 模块增强直接用 `ctx.agents/tools/sessionTitle/workspaceRegistry` 官方类型；事件折叠改 SessionEvent 判别联合；工具定义改 `ToolDefinition` 校验；全部 type-only，产物无新增运行时依赖；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-09 README 新增「Jira 业务流程一览」** — 以四条链路为主线整理 Jira 业务（前提配置 → 浏览待办 → 点击发起 Agent 会话分析并异步回传确认评论 → 会话内 jira_* 工具操作），附错误语义速查；详见 [开发日志](docs/dev-log.md)。

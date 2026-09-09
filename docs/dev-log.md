@@ -2,6 +2,14 @@
 
 > 规则：**每次功能 / BUG 修改 / 实现都要记录开发日志。** 记录在 `docs/dev-log.md`，一次功能或修复一条记录。按时间倒序（最新在上）。
 
+## 2026-09-09 — dsh 依赖范围对齐已发布的 0.1.2-rc.1
+
+**类型**：重构 / 依赖维护
+**涉及**：`package.json`、`pnpm-lock.yaml`
+**背景 / 问题**：peer + dev 中 `@deepseek-ai/dsh-*` 十个包仍声明 `^0.1.2-alpha.2`，而 dsh 已发布 0.1.2-rc.1（lock 实际解析的也是 rc.1）—— 声明范围滞后于真实版本面。
+**改动**：package.json 中 `dsh-agent / dsh-llm / dsh-session / dsh-session-title / dsh-tools / dsh-workspace / dsh-client-connection / dsh-client-ui-layout / dsh-client-ui-renderer / dsh-settings` 的 peerDependencies 与 devDependencies 范围由 `^0.1.2-alpha.2` 全部改为 `^0.1.2-rc.1`（保留 caret）；`pnpm install` 同步 lockfile。
+**验证**：`pnpm typecheck` / `pnpm build` 通过；`node --check lib/host.js` 通过；lockfile 无 alpha.2 残留，安装版本仍为 0.1.2-rc.1。
+
 ## 2026-09-09 — 修复 Session 事件读取 API 版本错位（events vs snapshotEvents）
 
 **类型**：BUG 修复
