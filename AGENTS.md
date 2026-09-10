@@ -8,7 +8,7 @@ hello-plugin 是 dsh（DeepSeek Harness）的最小可运行插件示例，演�
 
 ```
 src/host/                  宿主半区（Node Cordis 插件）
-  index.ts                 入口：注册 /hello RPC 通道，整合各功能模块
+  index.ts                 入口：注册 /hello 通道（经 web-channel），整合各功能模块
   types.ts                 共享类型（PendingEvent、JiraSettings、LlmConfig 等）
   constants.ts             常量（name、inject、POLL_TIMEOUT_MS、颜色映射）
   errors.ts                错误类（JiraConfigError、rpcFailure）
@@ -16,6 +16,7 @@ src/host/                  宿主半区（Node Cordis 插件）
   jira.ts                  Jira API 工具（fetchJiraTodos、fetchJiraIssueDetail、fetchJiraIssueSummary、addJiraComment）
   jira-agent.ts            Jira 分析 Agent 会话（runJiraAnalysisSession：建会话 → 等静止 → 折叠最终文本）
   news.ts                  Google News 工具（fetchGoogleNews、installGoogleNewsTool）
+  web-channel.ts           自建 /hello web 通道（webServer 路由 + requestRejection 栅栏 + RPC 信封）
 src/client/                客户端半区（浏览器）
   index.ts                 入口：注册 HelloPill 到 shell.overlay 插槽
   types.ts                 共享类型（HelloEvent、JiraTodo、JiraAnalysis）

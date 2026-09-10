@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentRegistry } from '@deepseek-ai/dsh-agent'
-import type { ConnectionRpcResult } from '@deepseek-ai/dsh-client-connection'
+import type { ConnectionRpcHandler, ConnectionRpcResult } from '@deepseek-ai/dsh-client-connection'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-title'
@@ -13,6 +13,7 @@ import { fetchJiraTodos, fetchJiraIssueSummary, addJiraComment } from './jira'
 import { registerJiraTools } from './jira-tools'
 import { runJiraAnalysisSession } from './jira-agent'
 import { installGoogleNewsTool } from './news'
+import { mountHelloChannel } from './web-channel'
 import { JiraConfigError, rpcFailure } from './errors'
 import type { PendingEvent, JiraSettings, LlmConfig } from './types'
 
@@ -71,8 +72,8 @@ export function apply(ctx: Context): void {
 	// ---- 注册 Jira 全局工具 ----
 	registerJiraTools(ctx, resolveJiraSettings)
 
-	// 注册 /hello 通道，用于客户端与宿主进行简单的通信测试
-	ctx.connection.rpc.handle('/hello', async (endpoint, payload, signal): Promise<ConnectionRpcResult<unknown>> => {
+	// /hello 通道的处理器：客户端经 ctx.connection.rpc.call('/hello', endpoint, { args }) 调用。
+	const handleHello: ConnectionRpcHandler = async (endpoint, payload, signal): Promise<ConnectionRpcResult<unknown>> => {
 		const args = (payload as { args?: Record<string, unknown> } | undefined)?.args ?? {}
 
 		if (endpoint === 'ping') {
@@ -252,7 +253,14 @@ export function apply(ctx: Context): void {
 		}
 
 		return rpcFailure('bad-request', `unknown endpoint: ${endpoint}`)
-	})
+	}
+
+	// 注册 /hello 通道。注意：**不用** `ctx.connection.rpc.handle` —— 新版 harness 的该 API
+	// 把通道挂到 connection 插件自身 ctx 的 webServer 上（解析起点是 connection 的 fiber，
+	// 消费方无法通过声明依赖满足），实测必抛 `cannot get property "webServer" without inject`。
+	// 改为自建等价路由：见 src/host/web-channel.ts（复用 connection.requestRejection 栅栏 +
+	// Connection RPC 信封，客户端半区零改动）。
+	mountHelloChannel(ctx, handleHello)
 
 	// 每 5 秒自动发一个事件，证明「host 主动触发」不需要任何客户端请求。
 	ctx.effect(() => {

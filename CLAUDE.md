@@ -15,6 +15,7 @@ src/host/config.ts       工程配置文件加载（jira.config.json / llm.confi
 src/host/jira.ts         Jira API 工具（fetchJiraTodos、fetchJiraIssueDetail、fetchJiraIssueSummary、addJiraComment）
 src/host/jira-agent.ts   Jira 分析 Agent 会话（runJiraAnalysisSession：建会话 → 等静止 → 折叠最终文本）
 src/host/news.ts         Google News 工具（fetchGoogleNews、installGoogleNewsTool）
+src/host/web-channel.ts  自建 /hello web 通道（绕开 rpc.handle 缺陷：webServer 路由 + requestRejection 栅栏 + RPC 信封）
 src/client/index.ts      客户端入口：注册 HelloPill 到 shell.overlay 插槽
 src/client/types.ts      共享类型（HelloEvent、JiraTodo、JiraAnalysis）
 src/client/components/   客户端 UI 组件（HelloPill、Panel、TodoCard、AnalysisPanel、EventBubbles 等）
@@ -67,7 +68,7 @@ docs/
 
 ### 客户端 → 宿主：Unary RPC
 
-- 宿主：`inject: ['connection']`，`ctx.connection.rpc.handle('/hello', handler)`。handler 收 `(endpoint, payload, signal)`，返回 `{ ok: true, value }` 或 `{ ok: false, error: { code, message, details } }`。
+- 宿主：`inject: ['connection', 'webServer', …]`；**不用** `ctx.connection.rpc.handle`（见「关键约束」第 8 条）—— 用 `src/host/web-channel.ts` 的 `mountHelloChannel(ctx, handler)` 在插件自己的 `webServer` 上注册 `/hello` 前缀路由，内部复用 `connection.requestRejection` 栅栏并编解码 Connection RPC 信封。handler 收 `(endpoint, payload, signal)`，返回 `{ ok: true, value }` 或 `{ ok: false, error: { code, message, details } }`。
 - 客户端：`inject: ['connection']`，`ctx.connection.rpc.call('/hello', 'ping' | 'jira/todos', { args })` → `Promise<{ ok, value } | { ok, error }>`。payload 信封必须是 `{ args: {...} }`。
 
 ### 宿主 → 客户端：长轮询
@@ -101,6 +102,7 @@ dsh 的标准事件转发（`ctx.remote.$on`）对自定义事件不适用：`re
 5. Jira Cloud `/rest/api/2/search` 已移除（410），须用 `/rest/api/3/search/jql`。
 6. Agent 会话失败不抛给 `whenIdle`（模型失败时静默 resolve）→ 失败只能从日志判定：扫 `turn/end` reason（error/aborted）或听 `agent/error` 事件。
 7. `handle.dispose()` 会**删除会话**（左侧工作区条目随之消失）→ 要让会话留在左侧可见就**不要 dispose**（新闻 / 分析会话都如此）。
+8. **`connection.rpc.handle` 在当前 harness 版本消费方不可用**（2026-09-10 定位）：该 API 把通道注册到 **connection 插件自身 ctx** 的 `webServer` 上（`rpc-host.ts` 的 `register()`：`owner.effect(() => owner.webServer.register(route))`，`owner` = 构造服务时传入的 connection 插件 ctx，只 inject 了 `credentials`）→ 解析起点是 connection 的 fiber，**消费方无论如何声明依赖都无法满足**，调用即抛 `cannot get property "webServer" without inject`，整个插件树加载失败；即使侥幸不抛，通道也不会挂上（POST 落到静态兜底返回 405，浏览器端表现为 `transport failure … HTTP 405`）。**本插件改为自建等价路由**：`src/host/web-channel.ts` 在插件自己的 `ctx.webServer` 上注册 `/hello` 前缀路由，复用 `connection.requestRejection`（Host/Origin + 浏览器 cookie 栅栏）与 Connection RPC 信封，客户端半区零改动。
 
 ## UI 插槽（客户端）
 

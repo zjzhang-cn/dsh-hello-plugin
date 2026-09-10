@@ -179,6 +179,7 @@ ctx.effect(() => slots.inject('shell.overlay', () => slots.register(
 4. `window.__ModuleLoader__.load({ id })` 的 id 必须等于包名。
 5. 自建 `rpc.handle` 通道在浏览器端是请求-响应（`rpc.open` 只存在于 worker 隧道）。
 6. 长轮询要点：广播语义、超时兜底、abort 清理。
+7. **`connection.rpc.handle` 在当前 harness 版本消费方不可用**：它把通道注册到 **connection 插件自身 ctx** 的 `webServer` 上（`rpc-host.ts` 的 `register()`：`owner.effect(() => owner.webServer.register(route))`，`owner` = 服务构造时传入的 connection 插件 ctx，只 inject 了 `credentials`）→ 消费方声明依赖无法满足，调用抛 `cannot get property "webServer" without inject`；不抛时通道也挂不上（POST → 静态兜底 405）。**可行做法**：自建 web 路由（插件 inject `webServer`，`ctx.webServer.register({ kind:'prefix', path:'/hello', handler })`）+ 复用 `connection.requestRejection` 栅栏 + Connection RPC 信封（本插件 `src/host/web-channel.ts`）。
 
 ## 八、源码地图（快速定位）
 

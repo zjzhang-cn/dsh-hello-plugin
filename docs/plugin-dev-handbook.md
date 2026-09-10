@@ -53,17 +53,24 @@
 
 ### 03.3 宿主端注册通道
 
-在 `apply(ctx)` 里声明 `inject: ['connection']`，然后注册 `/hello` 通道。handler 返回标准结果信封。
+> ⚠️ **2026-09-10 修订**：当前 harness 版本的 `ctx.connection.rpc.handle` 对消费方不可用 —— 它把通道挂到 **connection 插件自身 ctx** 的 `webServer` 上（`rpc-host.ts` 的 `register()`，`owner` = 构造服务时传入的 connection 插件 ctx），解析起点是 connection 的 fiber，插件侧声明什么依赖都够不着，调用即抛 `cannot get property "webServer" without inject`；即使不抛，通道也挂不上（POST 落到静态兜底 → 405）。本插件改为**自建等价路由**（`src/host/web-channel.ts`）：插件自己的 `webServer` 注册 `/hello` 前缀路由 → 复用 `connection.requestRejection` 做信任/鉴权栅栏 → 按 Connection RPC 信封编解码；客户端侧 `rpc.call` 用法完全不变。
 
 ```js
 export const name = 'dsh-hello-plugin'
-export const inject = ['connection']
+export const inject = ['connection', 'webServer']
 
 export function apply(ctx) {
-  ctx.connection.rpc.handle('/hello', async (endpoint, payload) => {
-    // 返回 { ok:true, value } 或 { ok:false, error:{code,message,details} }
-    return { ok: true, value: 'pong from host, hello world!' }
-  })
+  // 自建通道（等价于 rpc.handle 的语义，见 src/host/web-channel.ts）
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'prefix',
+    path: '/hello',
+    handler: async (req, res) => {
+      // 1) 栅栏：Host/Origin + 浏览器 cookie
+      const rejection = ctx.connection.requestRejection(req)
+      if (rejection !== undefined) { res.writeHead(rejection); res.end(rejection === 401 ? 'unauthorized' : 'forbidden'); return }
+      // 2) 解析 { type:'client-request', rpcId, method, payload } → 3) 调 handler → 4) 回 { type:'server-response', rpcId, result }
+    },
+  }), 'hello-plugin: /hello rpc channel')
 }
 ```
 

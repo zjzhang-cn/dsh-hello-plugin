@@ -136,7 +136,7 @@
 
 | 通道 | 状态 | 源码位置 | 使用场景 |
 | --- | --- | --- | --- |
-| **Unary RPC** | ✅ | `src/host/index.ts` + `src/client/` | 客户端 → 宿主：ping / jira/todos / jira/analyze（发起即返回 `{ sessionId }`）/ jira/comment / news/start |
+| **Unary RPC** | ✅ | `src/host/index.ts` + `src/host/web-channel.ts` + `src/client/` | 客户端 → 宿主：ping / jira/todos / jira/analyze（发起即返回 `{ sessionId }`）/ jira/comment / news/start。**宿主侧为自建路由**：`connection.rpc.handle` 在当前 harness 版本把通道挂到 connection 插件自身 ctx 的 webServer 上（消费方够不着，抛 `without inject` / 通道静默挂不上 → 405），故改在插件自己的 `webServer` 注册前缀路由 + 复用 `requestRejection` 栅栏 + Connection RPC 信封 |
 | **长轮询** | ✅ | `src/host/index.ts` | 宿主 → 客户端：`events/poll` 广播推送，15s 超时；既推 `hello/notice` 气泡，也推 `jira/analysis-done` / `jira/analysis-failed` 结构化载荷 |
 | **Typert Remote** | ⬜ | — | 未使用 |
 | **Remote events** | ⬜ | — | 未使用（allowlist 限制，改用长轮询） |

@@ -2,6 +2,20 @@
 
 > 规则：**每次功能 / BUG 修改 / 实现都要记录开发日志。** 记录在 `docs/dev-log.md`，一次功能或修复一条记录。按时间倒序（最新在上）。
 
+## 2026-09-10 — 修复 /hello 通道不可用：`rpc.handle` 缺陷 → 自建 web 通道
+
+**类型**：BUG 修复
+**涉及**：`src/host/web-channel.ts`（新增）、`src/host/index.ts`、`src/host/constants.ts`、`package.json`、`pnpm-lock.yaml`、`CLAUDE.md`、`AGENTS.md`、`README.md`、`docs/dev-log.md`、`docs/plugin-dev-handbook.md`、`docs/plugin-capability-catalog.md`、`docs/hello-plugin-capabilities.md`
+**背景 / 问题**：两个连续现象 —— ① `dsh web --patch …` 启动失败：`failed to apply loader entry dsh-hello-plugin: cannot get property "webServer" without inject`（抛在 `packages/client/connection/src/rpc-host.ts:179`）；② 加依赖/改作用域注册后启动通过，但浏览器点击报 `transport failure for /hello/news/start: HTTP 405`。
+**定位过程**（均实测，非推断）：
+- 405 探针：`POST /hello/ping` → 405、`GET /hello/ping` → 404 ⇒ `/hello` 前缀路由根本没挂上（405/404 来自 frontend-static 兜底）。
+- 插桩：`ctx.inject(['connection','webServer'], cb)` 的**回调执行了**且 `webCtx.webServer` 可解析，但 `rpc.handle` 内部抛错（被 cordis 静默吞掉）—— 捕获到同一句 `cannot get property "webServer" without inject`。
+- 读源码定性：`register()` 用 `owner.effect(() => owner.webServer.register(route))`，而 `owner = this.ctx` = **构造 `HostConnectionService` 时传入的 connection 插件 ctx**（`inject` 只有 `credentials`，"scoped to the reading Context" 的注释与实际不符）→ 解析起点是 connection 的 fiber，**消费方无论怎样声明依赖都无法满足**；connection 自挂 `/api` 走的是 `ctx.inject(['webServer'], webCtx => webCtx.effect(…))`，所以只有它自己能用。属 harness 侧缺陷（本仓库不改 harness）。
+**改动**：
+- 新增 `src/host/web-channel.ts`：`mountHelloChannel(ctx, handler)` 在**插件自己的 `ctx.webServer`** 上注册 `/hello` 前缀路由，行为对齐 harness 的 `rpcFetchHandler` + `bridge` —— ① `connection.requestRejection(req)` 做 Host/Origin + 浏览器 cookie 栅栏（403/401，拒绝响应与 connection 自挂 `/api` 逐字一致）；② 方法/内容类型/信封校验（404/415/400）与 1 MiB 请求体上限（413）；③ 端点解析规则与 `endpointFromPath` 相同（段模式 `[A-Za-z0-9_$.-]+`）；④ `res` close → `AbortController` 中止 handler（长轮询在页面关闭时释放）；⑤ 编解码 Connection RPC 信封（`{type:'client-request',rpcId,method,payload}` ↔ `{type:'server-response',rpcId,result}`）。
+- `src/host/index.ts`：`handleHello` 改由 `mountHelloChannel(ctx, handleHello)` 挂载；`src/host/constants.ts`：`inject` 增加 `webServer` 并补注释；`package.json`：新增类型依赖 `@deepseek-ai/dsh-host-webserver`（peer + dev，type-only，用于 `ctx.webServer` 的模块增强类型）。**客户端半区零改动**（仍走 `connection.rpc.call('/hello', …)`）。
+**验证**：`pnpm build` 通过；`dsh web --patch … --port 3099` 实测（避开 3080 上已有实例）：① 无 cookie POST → 401；② 用启动 URL 的 `?token=` 换取浏览器 cookie（303）后 POST `/hello/ping` → `{"ok":true,"value":"pong from host, hello probe!"}`；③ `/hello/jira/todos` → 正常的 `jira-not-configured` 错误信封；④ `/hello/events/poll` → 立即取回挂起的 `hello/notice` 事件。验证后已关闭实例。
+
 ## 2026-09-09 — 新增「dsh AGENT 插件」文档
 
 **类型**：文档

@@ -14,6 +14,7 @@
 | `src/host/jira.ts` | Jira API 工具：fetchJiraTodos、fetchJiraIssueDetail、fetchJiraIssueSummary、addJiraComment、adfToText |
 | `src/host/jira-agent.ts` | Jira 分析 Agent 会话：runJiraAnalysisSession（建会话 → 等静止 → 从会话日志折叠最终文本，替代原 llm.ts 直连 LLM） |
 | `src/host/news.ts` | Google News 工具：fetchGoogleNews、installGoogleNewsTool（ScopedLayers 注册） |
+| `src/host/web-channel.ts` | 自建 `/hello` web 通道：插件自己的 webServer 路由 + `connection.requestRejection` 信任/鉴权栅栏 + Connection RPC 信封编解码（绕开 `rpc.handle` 在当前 harness 版本的缺陷） |
 | `src/client/index.ts` | 客户端入口：通过 `ctx.slots.inject` 注册 `HelloPill` 到 `shell.overlay` 插槽 |
 | `src/client/types.ts` | 共享类型：HelloEvent、JiraTodo、JiraAnalysis |
 | `src/client/components/HelloPill.tsx` | 主容器组件：管理状态 + RPC 调用 + 组合子组件 |
@@ -166,7 +167,7 @@ dsh 采用「双面（dual-face）」插件模型：同一个包同时提供 Nod
 
 `dsh` 的双面插件天然支持「浏览器客户端 → Node 宿主」的 RPC 调用，走的是 client-connection 的通用通道：
 
-- **宿主端**：`src/host/index.ts` 的 `apply(ctx)` 里 `inject: ['connection']`，用 `ctx.connection.rpc.handle('/hello', handler)` 注册一条自定义通道（不能拦截 `/api` —— 那是 api-gateway 独占的共享通道）。handler 收到 `(endpoint, payload)`，返回 `{ ok: true, value }` 或 `{ ok: false, error }`。
+- **宿主端**：`src/host/index.ts` 的 `apply(ctx)` 里 `inject: ['connection', 'webServer', …]`，注册走 `src/host/web-channel.ts` 的 `mountHelloChannel(ctx, handler)` —— **不用** `ctx.connection.rpc.handle`：该 API 在当前 harness 版本把通道挂到 **connection 插件自身 ctx** 的 webServer 上（`rpc-host.ts` 的 `register()`），消费方无论如何声明依赖都够不着，调用即抛 `cannot get property "webServer" without inject`。自建通道做等价的事：插件自己的 `webServer` 注册 `/hello` 前缀路由 → `connection.requestRejection` 做 Host/Origin + 浏览器 cookie 栅栏 → 按 Connection RPC 信封编解码；handler 收到 `(endpoint, payload, signal)`，返回 `{ ok: true, value }` 或 `{ ok: false, error }`。
 - **客户端**：`src/client/index.tsx` 的插件声明 `inject: ['connection']`，点击 `HelloPill` 时用 `ctx.connection.rpc.call('/hello', 'ping', { args: { name } })` 发起调用。payload 遵循 Connection RPC 信封：必须是 `{ args: {...} }`。按钮文本会显示宿主返回的 `pong from host` 消息，**1 秒后恢复 `hello world x{n}` 样式并计数 +1**。
 
 宿主机日志里会输出 `client ping: ...`，可用于确认双向链路打通。
@@ -255,7 +256,7 @@ ssh -L 3080:127.0.0.1:3080 <remote-host>
 | --- | --- | --- |
 | **双面插件模型 + 加载** | `exports["."]` / `exports["./client"]` 两个半区；`dsh.client.platform=web` 扫描发现；ModuleLoader 惰性注册 | `load({ id })` 的 **id 必须等于包名**（图行 id） |
 | **Cordis 内核** | `name`+`apply(ctx)`、`inject` 依赖注入、`ctx.effect` 生命周期、`ctx.logger`、`ctx.get` 可选获取 | 一切注册包进 `ctx.effect()`；服务缺失用 `ctx.get` 容错 |
-| **Unary RPC**（客户端 → 宿主） | `connection.rpc.call('/hello', 'ping'…)` → `rpc.handle` handler | payload 信封 `{ args }`；结果 `{ ok, value } \| { ok, error }`；**`/api` 被 api-gateway 独占**，自定义通道须另开 |
+| **Unary RPC**（客户端 → 宿主） | `connection.rpc.call('/hello', 'ping'…)` → 宿主自建路由（信封同构） | payload 信封 `{ args }`；结果 `{ ok, value } \| { ok, error }`；**`/api` 被 api-gateway 独占**，自定义通道须另开；**`rpc.handle` 在当前 harness 版本消费方不可用**（挂到 connection 自身 ctx 的 webServer）→ 本插件自建 `/hello` 路由 + 复用 `requestRejection` 栅栏 |
 | **长轮询**（宿主 → 客户端） | `pending` 队列 + `waiters` 挂起表，`events/poll` 广播推送 | 标准 Remote events 转发对自定义事件不适用：`registerRemoteEvents` 是单例 + 事件名须进 allowlist —— 改用长轮询 |
 | **Agent 会话** | `ctx.agents.create` + `agent.followup` + `whenIdle`，驱动 Agent 获取新闻 / 分析 Jira issue（最终文本从 `session.events` 折叠回传，jira_* 全局工具对会话可见可直接调用） | 宿主建会话自动触发 `api-session/added` → Web UI 会话列表可见；`whenIdle` 对模型失败**静默 resolve**，须扫 `turn/end` reason 判定；**`dispose()` 会删除会话**（左栏条目消失），要保留可见就不 dispose |
 | **作用域工具** | `ctx.tools.register` 从 agentCtx 注册 `google_news`（ScopedLayers） | 仅该会话 Agent 可见，不污染全局；parameters 须**完整 JSON Schema**（简写被模型 API 拒绝） |
@@ -269,6 +270,7 @@ ssh -L 3080:127.0.0.1:3080 <remote-host>
 
 ## 开发日志
 
+- **2026-09-10 修复 /hello 通道不可用（rpc.handle 缺陷 → 自建 web 通道）** — 现象：插件树加载失败（`cannot get property "webServer" without inject`），或侥幸加载后浏览器报 `transport failure for /hello/news/start: HTTP 405`。根因：`connection.rpc.handle` 把通道挂到 **connection 插件自身 ctx** 的 webServer 上（`rpc-host.ts` 的 `register()`），解析起点是 connection 的 fiber，消费方无法通过声明依赖满足。改为新建 `src/host/web-channel.ts` 自建 `/hello` 路由：插件自己的 `webServer` 注册前缀路由 + 复用 `connection.requestRejection`（Host/Origin + 浏览器 cookie 栅栏）+ Connection RPC 信封，客户端零改动；`inject` 增加 `webServer`、新增类型依赖 `dsh-host-webserver`；实测 cookie 鉴权下 ping / jira/todos / events/poll 全链路通过；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-09 新增「dsh AGENT 插件」文档** — 新建 `docs/agent-plugin.md`：`ctx.agents` 本体（`@deepseek-ai/dsh-agent`）的包画像 —— registry 与 agent-loop 双层架构、peer 依赖底座、服务/句柄 API、agent/* 事件插桩缝、源码地图与 hello-plugin 使用界面对照；CLAUDE.md / AGENTS.md 布局与 README 结构表同步；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-09 新增「Agent 能力分析」文档** — 新建 `docs/agent-capabilities.md`：以新闻/Jira 分析两类 Agent 会话实证，深潜 Agent 能力面（create 可配项、handle 操作面、全局 vs 作用域工具、两种运行模式、未触达能力与踩坑清单），并同步 CLAUDE.md / AGENTS.md 布局与 README 结构表；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-09 dsh 依赖范围对齐 0.1.2-rc.1** — `@deepseek-ai/dsh-*` 十个包的 peer + dev 依赖范围由 `^0.1.2-alpha.2` 更新为 `^0.1.2-rc.1`（与 dsh 已发布版本面一致，lock 解析不变），`pnpm install` 同步 lockfile；详见 [开发日志](docs/dev-log.md)。

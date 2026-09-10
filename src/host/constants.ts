@@ -6,7 +6,11 @@ export const name = 'dsh-hello-plugin'
 // agents 服务（core/agent）用于创建新会话驱动 Agent；sessionTitle 用于给会话命名；
 // workspaceRegistry 用于把会话归入「新闻头条」工作区；
 // tools 服务用于注册全局工具（Jira 工具）。
-export const inject = ['connection', 'agents', 'sessionTitle', 'workspaceRegistry', 'tools']
+// 注：webServer 是**自建 /hello 通道的路由挂载点**（见 src/host/web-channel.ts）——
+// 当前 harness 版本的 `connection.rpc.handle` 把通道挂到 connection 插件自身 ctx 的
+// webServer 上，消费方够不着（调用即抛 `cannot get property "webServer" without inject`），
+// 故本插件在自己的 webServer 上注册前缀路由并复用 connection 的信任/鉴权栅栏。
+export const inject = ['connection', 'webServer', 'agents', 'sessionTitle', 'workspaceRegistry', 'tools']
 
 // 长轮询超时：客户端挂起一个 poll 请求，宿主在超时内等不到新事件就返回空数组。
 // 客户端收到空数组后立即发起下一次 poll —— 有事件时近乎实时，无事件时只挂一个请求。
