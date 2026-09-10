@@ -23,6 +23,24 @@ interface AnalysisFailedPayload {
   message: string
 }
 
+/** 宿主推送的新闻会话结束事件 payload（news/done | news/failed）。 */
+interface NewsSettledPayload {
+  sessionId: string
+  message?: string
+}
+
+/** /hello/news/status 返回的最近一次新闻会话状态。 */
+interface NewsStatusPayload {
+  sessionId: string
+  state: 'running' | 'done' | 'failed'
+  error?: string
+}
+
+/** 事件长轮询的单次请求上限：宿主挂起 15 秒，留出余量后超时。 */
+const POLL_ABORT_MS = 20_000
+/** news/start 的请求上限：只做建会话 + 发消息，正常秒级返回；超时视为失败放开按钮。 */
+const START_ABORT_MS = 30_000
+
 interface HelloPillProps {
   connection: ConnectionHandle
 }
@@ -48,6 +66,13 @@ export function HelloPill({ connection }: HelloPillProps): React.ReactElement {
   const [newsSession, setNewsSession] = React.useState<string | null>(null)
   const [newsLoading, setNewsLoading] = React.useState(false)
   const [newsError, setNewsError] = React.useState<string | null>(null)
+  // 最近一次发起且未结束的新闻会话 id：宿主在 Agent 会话静止后推 news/done / news/failed，
+  // 只有匹配该 id 的事件才解除按钮禁用（防止旧会话的结束事件提前放行新的请求）
+  const pendingNewsSessionRef = React.useRef<string | null>(null)
+  // 结束事件先于 news/start 响应抵达时暂存的结果（只留最近 5 条），供 startNewsSession 核对
+  const settledNewsRef = React.useRef<Array<{ sessionId: string; error: string | null }>>([])
+  // 未决会话 id 的确立时刻：用于判定「宿主重启后 /news/status 查不到会话」（见看门狗）
+  const pendingNewsSinceRef = React.useRef<number | null>(null)
   const [isMinimized, setIsMinimized] = React.useState(false)
 
   const loadTodos = (): void => {
@@ -126,24 +151,125 @@ export function HelloPill({ connection }: HelloPillProps): React.ReactElement {
     setCommentError(null)
   }
 
+  /**
+   * 按宿主权威状态收敛新闻按钮：只有当「未决会话已结束」（或没有未决会话但最近一次已结束）
+   * 时才解除禁用。事件（news/done / news/failed）与 /news/status 兜底核对共用这段逻辑。
+   */
+  const settleNews = (status: NewsStatusPayload): void => {
+    const pending = pendingNewsSessionRef.current
+    // 必须有未决会话且 id 一致才收敛：否则刚点击、sessionId 还没回来的那一刻，
+    // 上一轮的 done 状态会把按钮提前放开
+    if (pending === null || status.sessionId !== pending) return
+    if (status.state === 'running') return
+    pendingNewsSessionRef.current = null
+    pendingNewsSinceRef.current = null
+    setNewsLoading(false)
+    if (status.state === 'failed') {
+      setNewsError(status.error !== undefined && status.error !== '' ? status.error : 'Agent 获取新闻失败')
+    }
+  }
+
+  /** 标记一个未决新闻会话（RPC 返回 sessionId 或挂载同步时调用）。 */
+  const trackPendingNews = (sessionId: string): void => {
+    pendingNewsSessionRef.current = sessionId
+    pendingNewsSinceRef.current = Date.now()
+  }
+
   const startNewsSession = (): void => {
     if (newsLoading) return
     setNewsLoading(true)
     setNewsError(null)
+    setNewsSession(null)
+    pendingNewsSessionRef.current = null
+    settledNewsRef.current = []
     void connection.rpc
-      .call('/hello', 'news/start', { args: {} })
+      .call('/hello', 'news/start', { args: {} }, AbortSignal.timeout(START_ABORT_MS))
       .then((result) => {
-        if (result.ok) setNewsSession((result.value as { sessionId: string }).sessionId)
-        else setNewsError(`${result.error.code}: ${result.error.message}`)
+        if (result.ok) {
+          // 宿主已创建 Agent 会话并返回 sessionId，但 Agent 仍在运行：
+          // 保持 newsLoading（按钮禁用、显示「正在获取…」），直到宿主推 news/done / news/failed
+          const sessionId = (result.value as { sessionId?: unknown }).sessionId
+          const id = typeof sessionId === 'string' ? sessionId : null
+          setNewsSession(id)
+          if (id === null) {
+            setNewsLoading(false)
+            return
+          }
+          // 竞态兜底：结束事件与本响应走两条不同的 HTTP 连接，顺序无保证。若 news/done /
+          // news/failed 已先被 poll 收到（存入 settledNewsRef），这里就按暂存结果直接解除禁用，
+          // 否则按钮会永久停在「正在获取…」
+          const settled = settledNewsRef.current.find((item) => item.sessionId === id)
+          if (settled !== undefined) {
+            settledNewsRef.current = settledNewsRef.current.filter((item) => item.sessionId !== id)
+            setNewsLoading(false)
+            if (settled.error !== null) setNewsError(settled.error)
+            return
+          }
+          pendingNewsSessionRef.current = id
+          pendingNewsSinceRef.current = Date.now()
+        } else {
+          setNewsError(`${result.error.code}: ${result.error.message}`)
+          setNewsLoading(false)
+        }
       })
-      .catch((error: unknown) => setNewsError(String(error)))
-      .finally(() => setNewsLoading(false))
+      .catch((error: unknown) => {
+        setNewsError(String(error))
+        setNewsLoading(false)
+      })
   }
 
   React.useEffect(() => {
     loadTodos()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection])
+
+  // 挂载时同步一次新闻状态：页面在 Agent 运行途中刷新时，按钮应保持禁用态
+  React.useEffect(() => {
+    let cancelled = false
+    void connection.rpc
+      .call('/hello', 'news/status', { args: {} })
+      .then((result) => {
+        if (cancelled || !result.ok) return
+        const status = result.value as NewsStatusPayload | null
+        if (status === null || status.state !== 'running') return
+        trackPendingNews(status.sessionId)
+        setNewsSession(status.sessionId)
+        setNewsLoading(true)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [connection])
+
+  // 兜底看门狗：事件可能丢失（页面刷新、长轮询请求中断、宿主重启），
+  // 禁用期间每 3 秒用 /news/status 核对一次，结束就恢复按钮，不会永久卡住
+  React.useEffect(() => {
+    if (!newsLoading) return
+    let cancelled = false
+    const timer = setInterval(() => {
+      void connection.rpc
+        .call('/hello', 'news/status', { args: {} })
+        .then((result) => {
+          if (cancelled || !result.ok) return
+          const status = result.value as NewsStatusPayload | null
+          if (status !== null) {
+            settleNews(status)
+            return
+          }
+          // 宿主重启 / 插件重载会丢掉内存里的状态：若未决会话已确立超过一个核对周期
+          // 仍查不到记录，说明那次运行随宿主一起没了，直接恢复按钮（不再永久禁用）
+          const since = pendingNewsSinceRef.current
+          if (pendingNewsSessionRef.current !== null && since !== null && Date.now() - since > 6_000) {
+            pendingNewsSessionRef.current = null
+            pendingNewsSinceRef.current = null
+            setNewsLoading(false)
+          }
+        })
+        .catch(() => {})
+    }, 3_000)
+    return () => { cancelled = true; clearInterval(timer) }
+    // settleNews 只读 ref 与 setState，无需进依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connection, newsLoading])
 
   React.useEffect(() => {
     let cancelled = false
@@ -152,7 +278,11 @@ export function HelloPill({ connection }: HelloPillProps): React.ReactElement {
       if (cancelled || inflight) return
       inflight = true
       try {
-        const result = await connection.rpc.call('/hello', 'events/poll', { args: {} })
+        // 带上单次请求超时：宿主挂起 15 秒；若请求因宿主重启等原因悬住，
+        // 超时会走 catch 分支重试，避免 inflight 永远为 true 把轮询循环卡死
+        const result = await connection.rpc.call(
+          '/hello', 'events/poll', { args: {} }, AbortSignal.timeout(POLL_ABORT_MS),
+        )
         inflight = false
         if (!cancelled && result.ok && Array.isArray(result.value)) {
           const incoming = result.value as { event: string; args: unknown[] }[]
@@ -177,6 +307,24 @@ export function HelloPill({ connection }: HelloPillProps): React.ReactElement {
                   ? args.message
                   : 'Agent 分析失败')
               }
+              continue
+            }
+            // 新闻会话结束（Agent 跑完 / 失败）：解除按钮禁用，恢复可再次点击
+            if (item.event === 'news/done' || item.event === 'news/failed') {
+              const args = item.args[0] as Partial<NewsSettledPayload> | undefined
+              const sid = typeof args?.sessionId === 'string' ? args.sessionId : null
+              if (sid === null) continue
+              const error = item.event === 'news/failed'
+                ? (args?.message !== undefined && args.message !== '' ? args.message : 'Agent 获取新闻失败')
+                : null
+              if (sid !== pendingNewsSessionRef.current) {
+                // 结束事件先于 news/start 的响应抵达（两条连接顺序无保证）→ 暂存，交给 startNewsSession 核对
+                settledNewsRef.current = [...settledNewsRef.current.slice(-4), { sessionId: sid, error }]
+                continue
+              }
+              settleNews(item.event === 'news/failed'
+                ? { sessionId: sid, state: 'failed', ...(error !== null ? { error } : {}) }
+                : { sessionId: sid, state: 'done' })
               continue
             }
             bubble = `${item.event}: ${item.args.join(' ')}`
@@ -287,7 +435,7 @@ export function HelloPill({ connection }: HelloPillProps): React.ReactElement {
             onCancel: cancelAnalysis,
           }),
           React.createElement(EventBubbles, { events }),
-          React.createElement(NewsStatus, { newsSession, newsError }),
+          React.createElement(NewsStatus, { newsLoading, newsSession, newsError }),
           React.createElement('div', {
             style: { display: 'flex', gap: '8px', alignItems: 'center' },
           },

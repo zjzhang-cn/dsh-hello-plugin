@@ -42,6 +42,13 @@ export interface GoogleNewsItem {
   pubDate: string
 }
 
+/** 最近一次新闻会话的状态（/hello/news/status 返回值，供客户端兜底核对按钮禁用态）。 */
+export interface NewsStatus {
+  sessionId: string
+  state: 'running' | 'done' | 'failed'
+  error?: string
+}
+
 /** 配置文件加载器的日志接口。 */
 export interface ConfigLoaderLogger {
   info: (message: string, ...args: unknown[]) => void

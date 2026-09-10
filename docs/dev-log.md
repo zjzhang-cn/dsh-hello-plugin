@@ -2,6 +2,34 @@
 
 > 规则：**每次功能 / BUG 修改 / 实现都要记录开发日志。** 记录在 `docs/dev-log.md`，一次功能或修复一条记录。按时间倒序（最新在上）。
 
+## 2026-09-10 — 获取新闻按钮在 Agent 跑完前禁用（防重复点击）
+
+**类型**：功能
+**涉及**：`src/host/index.ts`、`src/client/components/HelloPill.tsx`、`src/client/components/NewsButton.tsx`、`src/client/components/NewsStatus.tsx`、`README.md`、`docs/dev-log.md`
+**背景 / 问题**：`news/start` 是「发起即返回 `{ sessionId }`」的端点，客户端在 RPC `.finally()` 里就把 `newsLoading` 置回 false —— 按钮只在一次 HTTP 往返内禁用，Agent 还在后台跑时就能继续点击，容易误开多个新闻会话。
+**改动**：
+- 宿主 `news/start`：`followup` 后追加 `void handle.agent.whenIdle().then(() => emit('news/done', [{ sessionId }])).catch(...)` → 失败推 `news/failed` + `message`。复用既有长轮询事件链路（与 `jira/analysis-*` 同款），会话仍不 dispose（保留在「新闻头条」工作区）。`whenIdle` 对模型失败静默 resolve，故成功/失败都以 `whenIdle` 返回为解除信号。
+- 客户端 `HelloPill`：新增 `pendingNewsSessionRef`；`news/start` 成功时只记录并展示 `sessionId`，**不再在 `.finally()` 取消 loading**（仅错误分支立即恢复）；poll 循环新增 `news/done` / `news/failed` 分支，按 `sessionId` 匹配 `pendingNewsSessionRef` 才 `setNewsLoading(false)`（旧会话事件丢弃，防止提前放行）。
+- **竞态兜底**：结束事件与 `news/start` 响应走两条不同的 HTTP 连接，顺序无保证 —— 若 `news/done` 先到会被「不匹配就丢弃」逻辑吃掉，按钮将永久禁用。故新增 `settledNewsRef`（暂存最近 5 条「先到的结束事件」），`startNewsSession` 拿到 `sessionId` 后回查该暂存并按结果立即解除禁用（含失败文案）。
+- `NewsButton`：禁用时 `cursor: not-allowed` + `opacity 0.75`，文案「正在获取…」，title 说明结束后可再次点击。
+- `NewsStatus`：新增 `newsLoading` prop —— 运行中蓝色「⏳ Agent 正在获取新闻（会话 …），完成后按钮恢复可点击」，结束后绿色「✅ 已创建会话 …」。
+**验证**：`pnpm build`（双 tsconfig + tsdown）与 `node --check lib/host.js` 通过；`lib/host.js` 含 `news/done` / `whenIdle`，`lib/client.js` 含 `news/failed` 分支。运行时需在挂载本 bundle 的 profile 点击 📰 验证：点击后按钮持续禁用，Agent 结束后（宿主日志 `emit: news/done`）恢复可点击。
+
+## 2026-09-10 — 修复「获取新闻」按钮不恢复：状态看门狗 + 长轮询超时
+
+**类型**：BUG 修复
+**涉及**：`src/host/index.ts`、`src/host/types.ts`、`src/client/components/HelloPill.tsx`、`README.md`、`docs/dev-log.md`
+**背景 / 问题**：用户实测点击「📰 获取新闻」后按钮一直停在「正在获取…」，即使 Agent 会话已 `turn/end` 也不恢复。
+**定位**（实测，非推断）：
+- 用 `~/.dsh/.credentials.yaml` 里的 browser-session secret 自签 `dsh-auth-*` cookie，直接 POST `/hello/*` 打通宿主链路（`ping` → pong、`/plugins/??…dsh-hello-plugin/client.js` 组合包内容含 `news/done`/`settledNewsRef`，确认浏览器加载的客户端是新代码）。
+- 实测 `news/start` + 反复 `events/poll`：会话结束后宿主**确实**推了 `news/done`（`{"event":"news/done","args":[{"sessionId":"news-7e2d20ed-…"}]}`）⇒ 宿主半区正常，问题在事件投递/客户端。
+- 结论：按钮恢复只依赖「单条长轮询事件」，该链路任何一次中断都会让按钮永久禁用 —— 尤其宿主重启会把浏览器在飞的长轮询请求悬住：`inflight` 在 `await` 前已置 true，请求若不 settle，轮询循环再也不会发下一次，事件全部积压在宿主队列里。
+**改动**：
+- 宿主新增 `/hello/news/status` 端点：内存维护最近一次新闻会话的权威状态 `latestNews = { sessionId, state: 'running'|'done'|'failed', error? }`（`NewsStatus` 类型入 `src/host/types.ts`）；`news/start` 建会话时置 running，`whenIdle` 收敛为 done / failed，建会话失败也置 failed（避免永远停在 running）。
+- 客户端三条恢复路径互为兜底：① 事件（原有，sessionId 匹配 + 先到事件暂存）；② **看门狗**：禁用期间每 3 秒 `/hello/news/status`，与未决 id 匹配且状态非 running 就恢复（事件丢失、运行途中刷新页面、宿主重启都能收敛；宿主重启导致状态为空时，未决 id 确立满 6 秒仍无记录即按结束处理）；③ **请求超时**：`events/poll` 带 `AbortSignal.timeout(20s)`、`news/start` 带 30s，超时走既有 catch 重试，`inflight` 不会永久卡死；另挂载时同步一次状态（运行途中刷新页面仍显示禁用）。
+- `settleNews` 要求未决 id 存在且匹配才收敛（否则刚点击、sessionId 未回来时上一轮的 done 会提前放开按钮）。
+**验证**：`pnpm build` 双半区通过、`node --check lib/host.js` 通过；自签 cookie 实测宿主 `news/start` → 10s 后 `news/done` 事件、且新端点 `/hello/news/status` 可读（**需重启 dsh web 才加载新宿主 bundle**；旧宿主对 `news/status` 返回 `bad-request: unknown endpoint`，此时看门狗自动退化为仅靠事件）。
+
 ## 2026-09-10 — 修复 /hello 通道不可用：`rpc.handle` 缺陷 → 自建 web 通道
 
 **类型**：BUG 修复

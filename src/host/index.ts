@@ -15,7 +15,7 @@ import { runJiraAnalysisSession } from './jira-agent'
 import { installGoogleNewsTool } from './news'
 import { mountHelloChannel } from './web-channel'
 import { JiraConfigError, rpcFailure } from './errors'
-import type { PendingEvent, JiraSettings, LlmConfig } from './types'
+import type { PendingEvent, JiraSettings, LlmConfig, NewsStatus } from './types'
 
 export { name, inject }
 export type { JiraTodo, JiraSettings } from './types'
@@ -51,6 +51,11 @@ export function apply(ctx: Context): void {
 	// ---- 宿主 → 客户端 的事件队列（长轮询）----
 	const pending: PendingEvent[] = []
 	const waiters: Array<{ resolve: (value: PendingEvent[] | null) => void; timer: NodeJS.Timeout }> = []
+
+	// 最近一次新闻会话的状态。事件（news/done / news/failed）可能因页面刷新、
+	// 长轮询请求中断等原因丢失，客户端在禁用按钮期间用 /news/status 兜底核对，
+	// 因此这里维护一份权威状态（只保留最近一条，UI 也只展示最近一次）。
+	let latestNews: NewsStatus | null = null
 
 	// ---- 宿主向客户端发送事件,将消息添加到待处理队列 ----
 	function emit(event: string, args: unknown[] = []): void {
@@ -172,6 +177,7 @@ export function apply(ctx: Context): void {
 			const agents = ctx.get('agents') as AgentRegistry | undefined
 			if (agents === undefined) return rpcFailure('agents-unavailable', 'agents 服务不可用')
 			const sessionId = 'news-' + randomUUID()
+			latestNews = { sessionId, state: 'running' }
 			try {
 				// 获取 workspaceRegistry 服务（官方 dsh-workspace 类型）
 				const workspaceRegistry = ctx.get('workspaceRegistry') as WorkspaceRegistry | undefined
@@ -209,11 +215,34 @@ export function apply(ctx: Context): void {
 					}],
 					source: { kind: 'plugin' as const, plugin: name },
 				}))
+				// 后台等会话静止（Agent 跑完这一轮，模型失败也会 resolve），再经长轮询推
+				// news/done / news/failed 给前端，解除「获取新闻」按钮的禁用态。
+				// 注意 whenIdle 返回后会话不 dispose —— 保留在左侧「新闻头条」工作区供查看。
+				void handle.agent.whenIdle()
+					.then(() => {
+						logger.info('news session idle:', sessionId)
+						if (latestNews?.sessionId === sessionId) latestNews = { sessionId, state: 'done' }
+						emit('news/done', [{ sessionId }])
+					})
+					.catch((error: unknown) => {
+						const message = error instanceof Error ? error.message : String(error)
+						logger.warn('news session failed:', sessionId, message)
+						if (latestNews?.sessionId === sessionId) latestNews = { sessionId, state: 'failed', error: message }
+						emit('news/failed', [{ sessionId, message }])
+					})
 				return { ok: true, value: { sessionId } }
 			} catch (error) {
 				logger.warn('news/start failed:', String(error))
+				// 会话没能跑起来：同样落到 failed，否则 /news/status 会一直停在 running
+				latestNews = { sessionId, state: 'failed', error: String(error) }
 				return rpcFailure('news-error', `发起新闻会话失败：${String(error)}`)
 			}
+		}
+		// 注册 /news/status 通道：返回最近一次新闻会话的权威状态，
+		// 供客户端在按钮禁用期间兜底核对（事件丢失时也能恢复可点击）。
+		// 请求参数：无；返回：{ sessionId, state: 'running'|'done'|'failed', error? } | null
+		if (endpoint === 'news/status') {
+			return { ok: true, value: latestNews }
 		}
 		// 注册 /events/poll 通道，用于轮询事件
 		// 请求参数：无
