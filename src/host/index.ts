@@ -172,14 +172,18 @@ export function apply(ctx: Context): void {
 				return rpcFailure('jira-error', `添加 Jira 评论失败：${String(error)}`)
 			}
 		}
-		// 注册 /news/start 通道，用于启动新闻头条代理
+		// 注册 /news/start 通道
+		// 启动 Google 新闻订阅，返回 sessionId
 		if (endpoint === 'news/start') {
 			if (llmConfig.provider === undefined || llmConfig.model === undefined) {
 				return rpcFailure('llm-not-configured', 'llm.config.json 未配置 provider/model')
 			}
 			// 获取 agents 服务（官方 dsh-agent 类型）
 			const agents = ctx.get('agents') as AgentRegistry | undefined
-			if (agents === undefined) return rpcFailure('agents-unavailable', 'agents 服务不可用')
+			if (agents === undefined) {
+				return rpcFailure('agents-unavailable', 'agents 服务不可用')
+			}
+			// 创建一个 sessionId
 			const sessionId = 'news-' + randomUUID()
 			latestNews = { sessionId, state: 'running' }
 			try {
@@ -194,17 +198,28 @@ export function apply(ctx: Context): void {
 				// 如果 workspace 创建成功，则设置标题为“新闻头条”  
 				if (workspace !== undefined) await workspace.setTitle('新闻头条')
 				// 创建一个新的 agent 会话，使用 llmConfig 中的 provider 和 model，并安装 google_news 工具
+				/***
+				 * 1. 创建 agentCtx
+				 * 2. 执行 setup(agentCtx)
+				 * 3. 执行 commit()
+				 * 4. 注册 session
+				 * 5. 注册 agent
+				 * 6. 发出 created 事件
+				 * 7. Agent 开始工作
+				 ***/
 				const handle = await agents.create({
 					// 使用随机生成的 sessionId
 					sessionId: sessionId as never,
 					meta: { cwd },
 					// 设置 agent 的选项，包括 provider 和 model
 					agentOptions: { provider: llmConfig.provider, model: llmConfig.model },
+					// 设置 setup 函数, 用于Agent的配置 ，用于安装 google_news 工具
 					setup: (agentCtx: Context) => {
 						// 安装 google_news 工具
 						installGoogleNewsTool(agentCtx)
 					},
 				})
+				// 如果 workspace 创建成功，则将 sessionId 添加到 workspace 中
 				if (workspace !== undefined) await workspace.attachSession(sessionId as SessionId)
 				const now = new Date()
 				// 获取当前时间的本地化字符串，格式为“时:分:秒”，不使用 12 小时制,
@@ -212,6 +227,30 @@ export function apply(ctx: Context): void {
 				// 重命名 agent 会话的标题为“获取新闻 + 时间戳”（sessionTitle 由 dsh-session-title 增强提供类型）
 				ctx.sessionTitle.rename(handle.agent.session, `获取新闻 ${stamp}`)
 				// 发送一条用户消息，要求使用 google_news 工具获取最新 Google 新闻，并用简洁的中文总结当前最重要的 5 条新闻，每条附链接	
+				// followup = 新的一轮对话
+				// steer = 当前任务的方向修正
+				// inject = 补充上下文
+				// cancel = 停止执行
+				// whenIdle = 等待结束
+				// runMaintenance = 空闲时做后台维护
+				// 			     Agent
+				//                 │
+				//     ┌───────────┼───────────┐
+				//     │           │           │
+				//  followup    steer      inject
+				//     │           │           │
+				//     └──────► Inbox ◄────────┘
+				//                 │
+				//                 ▼
+				//            Driver Loop
+				//                 │
+				//         Prompt Assembly
+				//                 │
+				//               Model
+				//                 │
+				//             Tool Call
+				//                 │
+				//            Session Log
 				handle.agent.followup(createUserMessage({
 					content: [{
 						type: 'text' as const,
@@ -242,15 +281,18 @@ export function apply(ctx: Context): void {
 				return rpcFailure('news-error', `发起新闻会话失败：${String(error)}`)
 			}
 		}
-		// 注册 /agent/status 通道：查询「获取新闻」Agent 的实时状态，控制前端按钮禁用态。
+		// 注册 /agent/status 通道：查询 Agent 的实时状态.
 		// 传 sessionId：直接查 agents 注册表里该会话的活跃 Agent —— status 'running' 表示还在跑，
 		//   'idle' 表示这一轮已结束（映射为客户端状态 'done'）；Agent 不在注册表（宿主重启 /
 		//   服务不可用）时回退 latestNews，仍查不到按 'failed' 返回，按钮不会被永久禁用。
 		// 不传 sessionId：返回最近一次新闻会话的权威状态（客户端挂载/刷新后还不知道会话 id）。
 		// 返回：{ sessionId, state: 'running'|'done'|'failed', error? } | null
 		if (endpoint === 'agent/status') {
+			// 获取sessionId
 			const sessionIdArg = typeof args.sessionId === 'string' && args.sessionId !== '' ? args.sessionId : null
+			// 获取agents 服务（官方 dsh-agent 类型）
 			const agents = ctx.get('agents') as AgentRegistry | undefined
+			// 获取该sessionId对应的Agent
 			const agent = sessionIdArg !== null && agents !== undefined
 				? agents.get(sessionIdArg as SessionId)
 				: undefined
