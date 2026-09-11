@@ -16,7 +16,7 @@
 				"dsh",
 				"web",
 				"--patch",
-				"../hello-plugin/dev.patch.yml"
+				"../dsh-hello-plugin/dev.patch.yml"
 			],
 			"cwd": "${workspaceFolder}/../deepseek-harness",
 			"console": "integratedTerminal",
@@ -36,7 +36,7 @@
 				"apps/cli/src/bin.ts",
 				"web",
 				"--patch",
-				"../hello-plugin/dev.patch.yml"
+				"../dsh-hello-plugin/dev.patch.yml"
 			],
 			"env": {
 				"DEBUG":"hello-plugin*"

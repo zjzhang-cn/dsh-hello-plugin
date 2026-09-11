@@ -24,10 +24,9 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
-import type { ConnectionRpcHandler, HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
+import type { ConnectionRpcHandler, HostConnectionHandle,ConnectionTrustRequest } from '@deepseek-ai/dsh-client-connection'
 // 类型副作用导入：该包对 cordis Context 做模块增强（ctx.webServer 的类型来源）
 import type {} from '@deepseek-ai/dsh-host-webserver'
-
 /** 通道前缀：客户端 `connection.rpc.call('/hello', …)` 与本文件的路由共用。 */
 export const CHANNEL_PATH = '/hello'
 
@@ -38,7 +37,7 @@ const MAX_REQUEST_BODY_BYTES = 1024 * 1024
 const ENDPOINT_SEGMENT_PATTERN = /^[A-Za-z0-9_$.-]+$/
 
 /** `requestRejection` 的参数类型（IncomingMessage 结构上满足，仅类型层转换）。 */
-type TrustRequest = Parameters<HostConnectionHandle['requestRejection']>[0]
+type TrustRequest = ConnectionTrustRequest
 
 /** 客户端请求信封（Connection RPC 约定）。 */
 interface ClientRequestEnvelope {
@@ -90,7 +89,7 @@ async function handleRequest(
 	res: ServerResponse,
 ): Promise<void> {
 	// 与 connection 自挂 /api 路由一致：先过 Host/Origin 信任与鉴权栅栏（403 / 401）
-	const rejection = connection.requestRejection(req as unknown as TrustRequest)
+	const rejection = connection.requestRejection(req as ConnectionTrustRequest)
 	if (rejection !== undefined) {
 		res.writeHead(rejection)
 		res.end(rejection === 401 ? 'unauthorized' : 'forbidden')
@@ -166,6 +165,7 @@ async function handleRequest(
 export function mountHelloChannel(ctx: Context, handler: ConnectionRpcHandler): void {
 	// 服务在 apply 期间读取一次：register 的回调与请求处理都复用它
 	const connection = ctx.connection
+	// 挂载路由
 	ctx.effect(() => ctx.webServer.register({
 		kind: 'prefix',
 		path: CHANNEL_PATH,
