@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      confluence.js:
+        specifier: ^3.2.0
+        version: 3.2.0
       jira.js:
         specifier: ^5.4.0
         version: 5.4.0(debug@4.4.3)
@@ -496,6 +499,10 @@ packages:
   compression@1.8.1:
     resolution: {integrity: sha512-9mAqGPHLakhCLeNyxPkK4xVo746zQ/czLH1Ky+vkitMnWfWZps8r0qXuwhwizagCRttsL4lfG4pIOvaWLpAP0w==}
     engines: {node: '>= 0.8.0'}
+
+  confluence.js@3.2.0:
+    resolution: {integrity: sha512-UsFoc5qlt1N6wWvE4aCz9Qbgfc9nq5wusLAbSWGCWw0XYEDnmzdOiEHwFUmV7XU52pnsXszCUNFMiVOxEyvE2A==}
+    engines: {node: '>=22'}
 
   content-type@2.1.0:
     resolution: {integrity: sha512-mj7UPXE0jaqaOsukNZRUEfEi2AcL7C/vwmwcHV0O97eO1E1pxBZuyjlZrx5seTaNBg1U6+o35wpa35Qfcc+7ag==}
@@ -1208,6 +1215,10 @@ snapshots:
       vary: 1.1.2
     transitivePeerDependencies:
       - supports-color
+
+  confluence.js@3.2.0:
+    dependencies:
+      zod: 4.6.1
 
   content-type@2.1.0: {}
 

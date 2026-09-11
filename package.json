@@ -12,6 +12,7 @@
 		"typecheck": "tsc -p tsconfig.client.json --noEmit && tsc -p tsconfig.host.json --noEmit"
 	},
 	"dependencies": {
+		"confluence.js": "^3.2.0",
 		"jira.js": "^5.4.0"
 	},
 	"peerDependencies": {
