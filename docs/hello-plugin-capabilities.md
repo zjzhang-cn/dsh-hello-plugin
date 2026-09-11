@@ -44,7 +44,7 @@
 | 能力 | 状态 | 源码位置 | 使用场景 |
 | --- | --- | --- | --- |
 | `ctx.llm` | ⬜ | — | 未使用（原 Jira 分析用例已迁至 Agent 会话，不再直连 `ctx.llm.stream`；Agent 的模型经 `llm.config.json` 配置） |
-| `ctx.tools` | ✅ | `src/host/news.ts`、`src/host/jira-tools.ts` | `ctx.tools.register()` 注册全局工具：google_news（ScopedLayers）、jira_search_issues、jira_get_issue、jira_create_issue、jira_add_comment、jira_update_status、jira_get_transitions |
+| `ctx.tools` | ✅ | `src/host/news.ts`、`src/host/jira-tools.ts`、`src/host/confluence-tools.ts` | `ctx.tools.register()` 注册全局工具：jira_*（6 个，jira.js）与 confluence_*（7 个，confluence.js）；google_news 从 agentCtx 注册（ScopedLayers） |
 | `ctx.systemPrompt` | ⬜ | — | 未使用 |
 | `ctx.tokenMeter` | ⬜ | — | 未使用 |
 | `ctx.deepseekLlmApiExtensions` | ⬜ | — | 未使用 |

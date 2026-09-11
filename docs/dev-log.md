@@ -2,6 +2,19 @@
 
 > 规则：**每次功能 / BUG 修改 / 实现都要记录开发日志。** 记录在 `docs/dev-log.md`，一次功能或修复一条记录。按时间倒序（最新在上）。
 
+## 2026-09-11 — 新增 Confluence 工具（confluence.js）给 Agent 用
+
+**类型**：功能
+**涉及**：`package.json`、`pnpm-lock.yaml`、`src/host/confluence.ts`（新建）、`src/host/confluence-tools.ts`（新建）、`src/host/config.ts`、`src/host/types.ts`、`src/host/errors.ts`、`src/host/index.ts`、`src/host/jira-agent.ts`、`.gitignore`、`confluence.config.example.json`（新建）、`README.md`、`CLAUDE.md`、`AGENTS.md`、`docs/hello-plugin-capabilities.md`、`docs/dev-log.md`
+**背景 / 问题**：Jira 侧已有 6 个全局工具（jira.js）供任意 Agent 会话调用；Confluence 侧没有任何工具，Agent 无法搜索/读取/维护 Confluence 内容。
+**改动**：
+- 新增依赖 `confluence.js@3.2.0`（dependencies；与 jira.js 一样由 tsdown 保持 external，运行时从 node_modules 解析，产物体积只增工具 schema 与包装代码）。
+- 新建 `src/host/confluence.ts`：`createV1Client` / `createV2Client` 双客户端（配置 `{ host, auth: { type: 'basic', email, apiToken } }`，与 jira.js 写法不同；CQL 搜索只在 v1、页面/空间/评论在 v2）；`storageToText` / `textToStorage` 正文转换（对模型只暴露纯文本，写入按空行包 `<p>` + 转义）；7 个包装函数（搜索、读页、列空间、列空间内页面、建页、改页、加评论）；`baseUrl` 归一化去尾部 `/wiki`（confluence.js 自带 `/wiki` 前缀）；返回模型字段一律存在性收窄。
+- 新建 `src/host/confluence-tools.ts`：`registerConfluenceTools(ctx, resolveSettings)` 以官方 `ToolDefinition` 注册 7 个全局工具（读 4 + 写 3）；`confluence_update_page` 先读当前版本号再 `version.number + 1` 写回（v2 乐观锁）。
+- 配置：新增 `loadProjectConfluenceConfig`（同 jira 逐级查找模式）、`ConfluenceSettings`、`ConfluenceConfigError`（`confluence-not-configured`）；`.gitignore` 加 `confluence.config.json`，新增 `confluence.config.example.json`；`index.ts` 注册 `confluence` settings namespace 并在 apply 内 `registerConfluenceTools`。
+- `jira-agent.ts` 分析任务提示词的禁写清单补 `confluence_create_page / confluence_update_page / confluence_add_comment`。
+**验证**：`pnpm typecheck` / `pnpm build` / `node --check lib/host.js lib/client.js` 通过；`lib/host.js` 保留 `import { createV1Client, createV2Client } from "confluence.js"`（external，与 jira.js 并列）；node 冒烟验证 7 个客户端方法在运行时存在（v2 page/space/comment + v1 search.searchByCQL），并确认 confluence.js 会 zod 校验配置（邮箱格式非法会在建模客户端时抛错）。运行期需在挂载本 bundle 的 profile 里经 Agent 会话实测（步骤见 README 验证第 9 条；**宿主半区改动需重启 dsh web**）。
+
 ## 2026-09-11 — 「获取新闻」按钮状态改用 agent/status 查询 Agent 实时状态
 
 **类型**：功能（改进）

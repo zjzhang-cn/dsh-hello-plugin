@@ -13,6 +13,8 @@
 | `src/host/config.ts` | 工程配置文件加载：jira.config.json / llm.config.json 逐级查找与解析 |
 | `src/host/jira.ts` | Jira API 工具：fetchJiraTodos、fetchJiraIssueDetail、fetchJiraIssueSummary、addJiraComment、adfToText |
 | `src/host/jira-agent.ts` | Jira 分析 Agent 会话：runJiraAnalysisSession（建会话 → 等静止 → 从会话日志折叠最终文本，替代原 llm.ts 直连 LLM） |
+| `src/host/confluence.ts` | Confluence API 工具（confluence.js v1/v2 双客户端、storage↔纯文本转换、7 个包装函数） |
+| `src/host/confluence-tools.ts` | Confluence 全局工具：confluence_search / get_page / list_spaces / list_pages / create_page / update_page / add_comment |
 | `src/host/news.ts` | Google News 工具：fetchGoogleNews、installGoogleNewsTool（ScopedLayers 注册） |
 | `src/host/web-channel.ts` | 自建 `/hello` web 通道：插件自己的 webServer 路由 + `connection.requestRejection` 信任/鉴权栅栏 + Connection RPC 信封编解码（绕开 `rpc.handle` 在当前 harness 版本的缺陷） |
 | `src/client/index.ts` | 客户端入口：通过 `ctx.slots.inject` 注册 `HelloPill` 到 `shell.overlay` 插槽 |
@@ -78,7 +80,20 @@ pnpm install
   }
   ```
 
-> 不配置 Jira/LLM 时插件仍可正常加载，对应功能会显示 `jira-not-configured` / `llm-not-configured` 提示，不影响其他功能。
+- **Confluence**（供 Agent 的 `confluence_*` 工具使用）：复制示例文件为 `confluence.config.json`（已 gitignore）：
+  ```sh
+  cp confluence.config.example.json confluence.config.json
+  ```
+  填入 Atlassian 站点地址、邮箱与 API Token（`baseUrl` 填**裸站点**如 `https://your-domain.atlassian.net`，带 `/wiki` 结尾会自动去除）：
+  ```json
+  {
+    "baseUrl": "https://your-domain.atlassian.net",
+    "email": "you@example.com",
+    "apiToken": "<Confluence API Token>"
+  }
+  ```
+
+> 不配置 Jira/Confluence/LLM 时插件仍可正常加载，对应功能会显示 `jira-not-configured` / `confluence-not-configured` / `llm-not-configured` 提示，不影响其他功能。
 
 ### 4. 构建
 
@@ -214,6 +229,26 @@ dsh 采用「双面（dual-face）」插件模型：同一个包同时提供 Nod
 - **评论端点**：`/hello/jira/comment`（`{ args: { key, text } }`）。`POST {baseUrl}/rest/api/3/issue/{key}/comment`，body 用 ADF 格式。
 - **客户端交互**：点击待办项 → 出现「Agent 正在分析…」面板（附「会话已创建，在左侧工作区可查看实时过程」提示）→ 收到 `jira/analysis-done` 后展示分析文本 + 「添加到评论 / 取消」按钮 → 同意则写回 Jira 并显示「✅ 已添加到 Jira 评论」。
 
+## Confluence 工具（confluence.js，给 Agent 用）
+
+用 [confluence.js](https://www.npmjs.com/package/confluence.js)（与 jira.js 同作者）给 Agent 注册 7 个 **全局工具**（`registerConfluenceTools`，`ctx.tools.register`），任何 Agent 会话可见：在左侧工作区打开任意会话直接吩咐即可（如「列出 Confluence 空间」「把 xxx 的正文读出来总结」）。
+
+- **配置**：工程根 `confluence.config.json`（优先，已 gitignore，模板见 `confluence.config.example.json`）或 `$DSH_HOME/settings.yaml` 的 `confluence:` 节（`baseUrl` / `email` / `apiToken`）。`baseUrl` 填裸站点地址，`/wiki` 结尾会自动去除（confluence.js 自己带 `/wiki` 前缀发请求）。未配置时工具照常列出，执行结果返回 `confluence-not-configured`，插件与其它功能不受影响。
+- **工具清单**：
+
+  | 工具 | 参数 | 说明 |
+  | --- | --- | --- |
+  | `confluence_search` | `{ cql, limit? }` | CQL 搜索（如 `space = "DOC" AND type = page`）|
+  | `confluence_get_page` | `{ id }` | 读页面：标题 / 版本 / 链接 / 正文（转纯文本）|
+  | `confluence_list_spaces` | `{ limit? }` | 列空间（id / key / 名称）|
+  | `confluence_list_pages` | `{ spaceId, limit?, title? }` | 列空间内页面 |
+  | `confluence_create_page` | `{ spaceId, title, bodyText }` | 创建页面 |
+  | `confluence_update_page` | `{ id, title?, bodyText }` | 更新正文（自动读版本号 +1 写回）|
+  | `confluence_add_comment` | `{ pageId, text }` | 页面底部评论 |
+
+- **实现要点**（与 jira-tools 的差异）：confluence.js 3.x 的工厂是 `createV1Client` / `createV2Client`（配置形如 `{ host, auth: { type: 'basic', email, apiToken } }`），CQL 搜索只在 v1、页面/空间/评论在 v2，因此 `src/host/confluence.ts` 同时持有两个客户端；v2 的 create/update 把参数里的 `body` **原样透传**为请求体（更新需 `version.number + 1`，工具内自动完成先读后写）；正文统一以 **storage 格式**收发，对模型只暴露纯文本（读转文本、写按空行分段包 `<p>` 并转义）。
+- **使用示例**：在任意会话里说「列出 Confluence 空间」，或「搜索标题含『部署手册』的页面并总结第一页正文」——会话转录会显示 `confluence_*` 的 tool/call + tool/result。
+
 ## Google 新闻会话（Agent 新会话）
 
 点击悬浮区域独立的「📰 获取新闻」按钮（青色，与 hello 按钮并列），宿主会发起一个**新会话**，会话里的 Agent 通过工具获取最新 Google 新闻并总结 —— LLM 交互全过程都在这个新会话中，dsh Web UI 的会话列表会自动出现该会话，点开即可查看完整过程：
@@ -263,7 +298,7 @@ ssh -L 3080:127.0.0.1:3080 <remote-host>
 | **Unary RPC**（客户端 → 宿主） | `connection.rpc.call('/hello', 'ping'…)` → 宿主自建路由（信封同构） | payload 信封 `{ args }`；结果 `{ ok, value } \| { ok, error }`；**`/api` 被 api-gateway 独占**，自定义通道须另开；**`rpc.handle` 在当前 harness 版本消费方不可用**（挂到 connection 自身 ctx 的 webServer）→ 本插件自建 `/hello` 路由 + 复用 `requestRejection` 栅栏 |
 | **长轮询**（宿主 → 客户端） | `pending` 队列 + `waiters` 挂起表，`events/poll` 广播推送 | 标准 Remote events 转发对自定义事件不适用：`registerRemoteEvents` 是单例 + 事件名须进 allowlist —— 改用长轮询 |
 | **Agent 会话** | `ctx.agents.create` + `agent.followup` + `whenIdle`，驱动 Agent 获取新闻 / 分析 Jira issue（最终文本从 `session.events` 折叠回传，jira_* 全局工具对会话可见可直接调用） | 宿主建会话自动触发 `api-session/added` → Web UI 会话列表可见；`whenIdle` 对模型失败**静默 resolve**，须扫 `turn/end` reason 判定；**`dispose()` 会删除会话**（左栏条目消失），要保留可见就不 dispose |
-| **作用域工具** | `ctx.tools.register` 从 agentCtx 注册 `google_news`（ScopedLayers） | 仅该会话 Agent 可见，不污染全局；parameters 须**完整 JSON Schema**（简写被模型 API 拒绝） |
+| **工具贡献（全局 + 作用域）** | `ctx.tools.register` 全局注册 `jira_*`（jira.js）、`confluence_*`（confluence.js）工具；从 agentCtx 注册 `google_news`（ScopedLayers，仅该会话可见） | 全局层对任意 Agent 会话可见（tools.view 合并 global）；parameters 须**完整 JSON Schema**（简写被模型 API 拒绝） |
 | **会话命名 / 工作区分组** | `ctx.sessionTitle.rename`；`workspaceRegistry.create` + `setTitle` + `attachSession` | workspace 按真实目录路径去重：新闻会话归「新闻头条」（宿主 cwd），Jira 分析会话归「Jira 分析」（插件包根目录）——同目录无法建第二个不同名分组，故用不同路径 |
 | **settings 与工程配置** | `ctx.settings` 注册 jira namespace；工程根 `jira.config.json` / `llm.config.json` 逐级查找 | 工程配置优先于全局 settings；凭据不提交 |
 | **插槽与 UI** | `ctx.slots` 注入 `HelloPill` 到 `shell.overlay`（inject 业务面把服务变组件 props） | 组件只靠 props、永不引用模块级 ctx；**组件必须直接传**（非包装函数） |
@@ -274,6 +309,7 @@ ssh -L 3080:127.0.0.1:3080 <remote-host>
 
 ## 开发日志
 
+- **2026-09-11 新增 Confluence 工具（confluence.js）给 Agent 用** — 新增依赖 `confluence.js@3.2.0`，`src/host/confluence.ts`（v1/v2 双客户端、storage↔纯文本、7 个包装函数）+ `confluence-tools.ts`（全局注册 `confluence_search / get_page / list_spaces / list_pages / create_page / update_page / add_comment`）；配置走工程根 `confluence.config.json`（模板 `confluence.config.example.json`，已 gitignore）或 settings.yaml 的 `confluence:` 节，未配置时工具返回 `confluence-not-configured`；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-11 「获取新闻」按钮状态改用 agent/status 查询 Agent 实时状态** — 新端点 `/hello/agent/status`（替代 `/news/status`）：带 `sessionId` 查 `ctx.agents` 里活跃 Agent 的 `agent.status`（`running`；`idle` 即本轮结束映射 `done`），查不到活跃 Agent 回退最近一次会话的权威状态、再无则 `failed`；不带 id 返回最近一次会话状态（刷新场景）。客户端挂载同步改回无参查询（修掉刷新后不保持禁用的回归），看门狗带未决 id 查询实时状态；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-10 修复「获取新闻」按钮不恢复（状态看门狗 + 长轮询超时）** — 按钮只靠单条 `news/done` 事件恢复，长轮询链路一断就永久禁用（宿主重启会把在飞请求悬住，`inflight` 卡死后循环不再发请求）。实测确认宿主确实推了 `news/done`（自签 browser cookie 直连 `/hello` 验证），改为三条兜底：新增宿主 `/hello/news/status` 权威状态端点 + 客户端禁用期间每 3 秒核对，`events/poll` 加 20s、`news/start` 加 30s `AbortSignal.timeout`，事件先到/状态丢失都能收敛；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-10 获取新闻按钮在 Agent 跑完前禁用** — 原实现 `news/start` 返回后即取消 loading，按钮只禁用一次往返、Agent 仍在跑时可重复点击：改为宿主 `followup` 后 `whenIdle()` 推 `news/done` / `news/failed`（复用长轮询事件链），客户端按 `sessionId` 匹配才恢复，禁用期间按钮「正在获取…」+ `not-allowed` 光标，提示条区分运行中（⏳）/ 已完成（✅）；详见 [开发日志](docs/dev-log.md)。
@@ -334,6 +370,8 @@ ssh -L 3080:127.0.0.1:3080 <remote-host>
 6. 在工程根放 `llm.config.json`（见 `llm.config.example.json`）配置 provider/model 后，点击某个待办项：面板出现「Agent 正在分析…」（附会话提示）；宿主日志出现会话创建与 `emit: jira/analysis-done`；左侧工作区出现「Jira 分析」分组与「分析 KEY HH:mm:ss」会话（运行中可点开查看 user/message → `jira_get_issue` 工具调用 → 输出的完整过程）→ 完成后面板展示分析文本 → 点「添加到评论」写回 Jira 并显示「✅ 已添加到 Jira 评论」；未配置 LLM 时立即显示 `llm-not-configured`。
 7. 点击「📰 获取新闻」按钮：按钮立即禁用并显示「正在获取…」且**在 Agent 跑完前不可再次点击**（提示条「⏳ Agent 正在获取新闻（会话 news-xxx）」）；dsh Web UI 会话列表自动出现该会话，点开可见完整 LLM 交互（user/message → google_news 工具调用含新闻列表 → assistant 总结）；**Agent 会话静止后**宿主推 `news/done`，按钮恢复可点击、提示条变「✅ 已创建会话 news-xxx，在会话列表查看 Agent 总结」。未配置 LLM 时立即显示 `llm-not-configured` 错误条，按钮随即恢复。
 8. 兜底核对（可选）：`agent/status` 端点可直接验证 —— `curl` 带浏览器 cookie POST `/hello/agent/status`（body 可带 `{"args":{"sessionId":"news-xxx"}}`）返回 `{ sessionId, state }`：带 id 时 state 来自**活跃 Agent 的实时状态**（`running`；跑完变 `done`；Agent 不在注册表且无记录则 `failed`），不带 id 时返回最近一次会话的权威状态（`null` 表示还没有过新闻会话）；即使 `news/done` 事件丢失（刷新页面 / 长轮询中断 / 宿主重启），按钮也会在 3 秒内按该状态恢复。**宿主半区改动需重启 `dsh web` 生效**（客户端 bundle 由 HMR 热加载）。
+
+9. （可选）在工程根放 `confluence.config.json`（见 `confluence.config.example.json`）后，在任意 Agent 会话里说「列出 Confluence 空间」或「搜索…」：会话转录出现 `confluence_*` 工具调用与结果（写工具如 `confluence_create_page` 会真实写入 Confluence，请自行核对/清理）；未配置时工具结果返回 `confluence-not-configured`，插件与其它功能不受影响。
 
 客户端半区在 dev 模式下由 harness 的 `scripts/dev-web.ts` watch 构建（按 `dsh.client` 扫描发现），改动后无需手动打包。
 

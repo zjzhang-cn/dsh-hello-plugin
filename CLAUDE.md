@@ -11,9 +11,11 @@ src/host/index.ts        宿主半区入口：注册 /hello RPC 通道，整合�
 src/host/types.ts        共享类型（PendingEvent、JiraSettings、JiraTodo 等）
 src/host/constants.ts    常量（name、inject、POLL_TIMEOUT_MS、颜色映射等）
 src/host/errors.ts       错误类（JiraConfigError、rpcFailure）
-src/host/config.ts       工程配置文件加载（jira.config.json / llm.config.json）
+src/host/config.ts       工程配置文件加载（jira.config.json / confluence.config.json / llm.config.json）
 src/host/jira.ts         Jira API 工具（fetchJiraTodos、fetchJiraIssueDetail、fetchJiraIssueSummary、addJiraComment）
 src/host/jira-agent.ts   Jira 分析 Agent 会话（runJiraAnalysisSession：建会话 → 等静止 → 折叠最终文本）
+src/host/confluence.ts   Confluence API 工具（confluence.js v1/v2 客户端、storage↔纯文本、7 个包装函数）
+src/host/confluence-tools.ts  Confluence 全局工具（registerConfluenceTools：搜索 / 读页 / 列空间 / 列页 / 建页 / 改页 / 评论）
 src/host/news.ts         Google News 工具（fetchGoogleNews、installGoogleNewsTool）
 src/host/web-channel.ts  自建 /hello web 通道（绕开 rpc.handle 缺陷：webServer 路由 + requestRejection 栅栏 + RPC 信封）
 src/client/index.ts      客户端入口：注册 HelloPill 到 shell.overlay 插槽
@@ -27,6 +29,7 @@ tsdown.config.ts         双半区 bundle 配置（host: node ESM；client: Modu
 cordis.patch.yml         bundle patch 层：把宿主插件行插入启动图（正式：包名引用）
 dev.patch.yml            开发用 patch（绝对路径，已 gitignore）
 jira.config.example.json Jira 配置模板（含占位符，可提交）；真实凭据放 jira.config.json（已 gitignore）
+confluence.config.example.json  Confluence 配置模板（可提交）；真实凭据放 confluence.config.json（已 gitignore）
 llm.config.example.json  LLM 配置模板（provider/model，可提交）；真实配置放 llm.config.json（已 gitignore）
 package.json             包清单：exports 两个半区 + dsh 集成字段（dsh-llm 为运行时依赖；dsh-agent/dsh-session/dsh-tools/dsh-workspace/dsh-session-title 为官方类型依赖，peer+dev、type-only）
 docs/
@@ -89,9 +92,17 @@ dsh 的标准事件转发（`ctx.remote.$on`）对自定义事件不适用：`re
 
 - **配置**：工程根 `llm.config.json`（`provider` / `model`，已 gitignore，模板见 `llm.config.example.json`），host 从 bundle 目录向上逐级查找（同 jira.config.json 模式）。
 - **端点**：`/hello/jira/analyze`（args: `{ key }`）→ 预检（缺 provider/model → `llm-not-configured`；`fetchJiraIssueSummary` 轻量取 summary 并校验 Jira 配置与 issue 存在）→ `agents.create` 新会话（`jira-<uuid>`，agentOptions 取配置）→ `workspaceRegistry.create(插件包根目录, 'Jira 分析')` + `attachSession`（与「新闻头条」并列的独立分组）→ `sessionTitle.rename`「分析 KEY HH:mm:ss」→ `followup`（要求先调**全局可见**的 `jira_get_issue` 工具取完整详情；禁止写操作工具）→ **立即返回 `{ sessionId }`**，会话后台运行。
-- **结果回传（长轮询）**：`agent.whenIdle()` 等静止（模型失败也 resolve，须扫日志判定）→ 从 `session.events`（followup 前 `seq` 边界之后）折叠最终文本（`assistant/message` 非空 text 逐条覆盖；`turn/end` reason 为 error/aborted 视为失败）→ `emit('jira/analysis-done', [{ key, summary, analysis, sessionId }])` 经 `events/poll` 推送；失败 → `emit('jira/analysis-failed', [{ sessionId, message }])`。会话**不 dispose**（dispose 会删会话），保留在左侧「Jira 分析」工作区供查看 / 续聊。
+- **结果回传（长轮询）**：`agent.whenIdle()` 等静止（模型失败也 resolve，须扫日志判定）→ 从会话事件日志（followup 前 `seq` 边界之后；`events` 快照 getter 与 `snapshotEvents` 两版 API 特性探测）折叠最终文本（`assistant/message` 非空 text 逐条覆盖；`turn/end` reason 为 error/aborted 视为失败）→ `emit('jira/analysis-done', [{ key, summary, analysis, sessionId }])` 经 `events/poll` 推送；失败 → `emit('jira/analysis-failed', [{ sessionId, message }])`。会话**不 dispose**（dispose 会删会话），保留在左侧「Jira 分析」工作区供查看 / 续聊。
 - **端点**：`/hello/jira/comment`（args: `{ key, text }`）→ `POST /rest/api/3/issue/{key}/comment`，body 用 ADF（`{ type: 'doc', ... }`）→ 返回 `{ added: true }`。
 - **客户端**：点击待办项 → 「Agent 正在分析…」（附会话提示）→ 收到 `jira/analysis-done`（仅 `sessionId` 匹配最近一次发起且未决的请求时生效，防旧会话覆盖）→ 分析面板（issue 标题 + 分析文本）→ 卡片内「添加到评论 / 取消」按钮 → 同意则调 comment 并显示「✅ 已添加到 Jira 评论」。
+
+### Confluence 工具（给 Agent 用，confluence.js）
+
+- **依赖**：`confluence.js@3.2.0`（`dependencies`，与 jira.js 一样标记为 external 运行时依赖）。工厂为 `createV1Client` / `createV2Client`，配置 `{ host, auth: { type: 'basic', email, apiToken } }`（与 jira.js 的 `authentication.basic` 写法不同）；CQL 搜索只在 v1、页面/空间/评论在 v2 → `src/host/confluence.ts` 同时持有 v1/v2 两个客户端。
+- **配置**：**工程根 `confluence.config.json` 优先**（已 gitignore，模板 `confluence.config.example.json`），其次 `ctx.settings` 的 `confluence` namespace（同 jira 模式）；未配置时插件照常加载，工具执行返回 `confluence-not-configured`。`baseUrl` 归一化为裸站点地址（去尾部 `/wiki`，confluence.js 自带 `/wiki` 前缀发请求）。
+- **工具**：`registerConfluenceTools`（apply 内紧随 `registerJiraTools`）全局注册 7 个：读 `confluence_search`（CQL）/ `confluence_get_page` / `confluence_list_spaces` / `confluence_list_pages`，写 `confluence_create_page` / `confluence_update_page` / `confluence_add_comment`（无审批门槛，同 jira 写工具）。更新工具先读当前版本号再 `version.number + 1` 写回（v2 乐观锁）。
+- **正文格式**：统一 storage 格式收发，对模型只暴露纯文本（读时转文本、写时按空行分段包 `<p>` 并转义）；v2 的 `body` 参数是请求体**原样透传**，完整 payload 由本模块组装。
+- `jira-agent` 的分析任务提示词把 confluence 写工具也列入禁写清单（分析会话只做 Jira 分析）。
 
 ### 关键约束（踩过的坑）
 
