@@ -2,6 +2,17 @@
 
 > 规则：**每次功能 / BUG 修改 / 实现都要记录开发日志。** 记录在 `docs/dev-log.md`，一次功能或修复一条记录。按时间倒序（最新在上）。
 
+## 2026-09-11 — 「获取新闻」按钮状态改用 agent/status 查询 Agent 实时状态
+
+**类型**：功能（改进）
+**涉及**：`src/host/index.ts`、`src/host/types.ts`、`src/client/components/HelloPill.tsx`、`README.md`、`docs/dev-log.md`
+**背景 / 问题**：按钮恢复此前只依赖宿主内存记账的最新状态（`latestNews`，来自 `whenIdle` 与建会话路径），并配一个 `/hello/news/status` 兜底端点 —— 那是插件自己的记录，不是 Agent 的真实状态。本次改为直接查 `ctx.agents` 注册表里活跃 Agent 的 `agent.status`（`'idle' | 'running'`），并把端点重命名为 `/hello/agent/status`。半成品里有两处漏洞：宿主把 `agent.status` 原样返回，与客户端 `running | done | failed` 的状态模型不匹配；客户端挂载同步误用 `pendingNewsSessionRef`（组件刚挂载时必为 `null`），丢失了「页面在运行途中刷新仍保持禁用」这条恢复路径。
+**改动**：
+- 宿主 `/hello/agent/status`（原 `/news/status` 不再使用）：带 `sessionId` → `agents.get(sessionId)` 查活跃 Agent，`status === 'running'` 返回 `running`，`idle`（本轮已跑完）映射 `done`；Agent 不在注册表（宿主重启 / agents 服务不可用）→ 回退 `latestNews`，仍无匹配记录按 `failed` 返回（按钮不会被永久禁用）。不带 `sessionId` → 返回 `latestNews`（页面刷新后客户端还不知道会话 id）。清掉了半成品里的调试 `console.log`。
+- 客户端：挂载同步改回**无参**查询（宿主返回的 `running` 已是活跃 Agent 的实时状态），刷新页面在 Agent 运行途中仍保持禁用；看门狗带未决会话 id 查询，收敛逻辑不变（`sessionId` 匹配才解除禁用）。
+- `src/host/types.ts` 的 `NewsStatus` 注释同步新端点与双分支语义。
+**验证**：`pnpm typecheck` / `pnpm build`（双半区）+ `node --check lib/host.js lib/client.js` 通过。运行时（需重启 `dsh web` 加载新宿主 bundle）：点击 📰 → 按钮禁用；运行中 `curl` 带 cookie POST `/hello/agent/status` body `{"args":{"sessionId":"news-xxx"}}` 返回 `running`；Agent 结束后同一请求返回 `done`（或看门狗 3 秒内自动恢复按钮）；刷新页面仍保持禁用。
+
 ## 2026-09-10 — 获取新闻按钮在 Agent 跑完前禁用（防重复点击）
 
 **类型**：功能

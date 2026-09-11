@@ -42,7 +42,11 @@ export interface GoogleNewsItem {
   pubDate: string
 }
 
-/** 最近一次新闻会话的状态（/hello/news/status 返回值，供客户端兜底核对按钮禁用态）。 */
+/**
+ * 新闻会话状态（/hello/agent/status 的返回值，与 news/done / news/failed 事件共用）：
+ * 查询活跃 Agent 时 running 来自 agent.status，idle 映射为 done；查不到活跃 Agent
+ * 则回退最近一次会话的权威状态 latestNews，供客户端控制「获取新闻」按钮禁用态。
+ */
 export interface NewsStatus {
   sessionId: string
   state: 'running' | 'done' | 'failed'

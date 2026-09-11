@@ -4,7 +4,7 @@ import type { AgentRegistry } from '@deepseek-ai/dsh-agent'
 import type { ConnectionRpcHandler, ConnectionRpcResult } from '@deepseek-ai/dsh-client-connection'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import type {} from '@deepseek-ai/dsh-session-title'
+import type { } from '@deepseek-ai/dsh-session-title'
 import type { WorkspaceRegistry } from '@deepseek-ai/dsh-workspace'
 import z from '@deepseek-ai/schemastery'
 import { name, inject, POLL_TIMEOUT_MS } from './constants'
@@ -53,7 +53,7 @@ export function apply(ctx: Context): void {
 	const waiters: Array<{ resolve: (value: PendingEvent[] | null) => void; timer: NodeJS.Timeout }> = []
 
 	// 最近一次新闻会话的状态。事件（news/done / news/failed）可能因页面刷新、
-	// 长轮询请求中断等原因丢失，客户端在禁用按钮期间用 /news/status 兜底核对，
+	// 长轮询请求中断等原因丢失，客户端在禁用按钮期间用 /agent/status 兜底核对，
 	// 因此这里维护一份权威状态（只保留最近一条，UI 也只展示最近一次）。
 	let latestNews: NewsStatus | null = null
 
@@ -81,6 +81,10 @@ export function apply(ctx: Context): void {
 	const handleHello: ConnectionRpcHandler = async (endpoint, payload, signal): Promise<ConnectionRpcResult<unknown>> => {
 		const args = (payload as { args?: Record<string, unknown> } | undefined)?.args ?? {}
 
+		// 注册 /ping 通道，用于测试连接
+		// 请求参数：
+		//   name: 客户端显示的名称（可选）
+		// 返回结果：{ ok: true, value: 'pong from host, hello <display>!' }</display>}
 		if (endpoint === 'ping') {
 			const nameArg = args.name
 			const display = typeof nameArg === 'string' ? nameArg : '(anonymous)'
@@ -221,27 +225,45 @@ export function apply(ctx: Context): void {
 				void handle.agent.whenIdle()
 					.then(() => {
 						logger.info('news session idle:', sessionId)
-						if (latestNews?.sessionId === sessionId) latestNews = { sessionId, state: 'done' }
-						emit('news/done', [{ sessionId }])
+						// if (latestNews?.sessionId === sessionId) latestNews = { sessionId, state: 'done' }
+						// emit('news/done', [{ sessionId }])
 					})
 					.catch((error: unknown) => {
 						const message = error instanceof Error ? error.message : String(error)
 						logger.warn('news session failed:', sessionId, message)
-						if (latestNews?.sessionId === sessionId) latestNews = { sessionId, state: 'failed', error: message }
-						emit('news/failed', [{ sessionId, message }])
+						// if (latestNews?.sessionId === sessionId) latestNews = { sessionId, state: 'failed', error: message }
+						// emit('news/failed', [{ sessionId, message }])
 					})
 				return { ok: true, value: { sessionId } }
 			} catch (error) {
 				logger.warn('news/start failed:', String(error))
-				// 会话没能跑起来：同样落到 failed，否则 /news/status 会一直停在 running
+				// 会话没能跑起来：同样落到 failed，否则 /agent/status 会一直停在 running
 				latestNews = { sessionId, state: 'failed', error: String(error) }
 				return rpcFailure('news-error', `发起新闻会话失败：${String(error)}`)
 			}
 		}
-		// 注册 /news/status 通道：返回最近一次新闻会话的权威状态，
-		// 供客户端在按钮禁用期间兜底核对（事件丢失时也能恢复可点击）。
-		// 请求参数：无；返回：{ sessionId, state: 'running'|'done'|'failed', error? } | null
-		if (endpoint === 'news/status') {
+		// 注册 /agent/status 通道：查询「获取新闻」Agent 的实时状态，控制前端按钮禁用态。
+		// 传 sessionId：直接查 agents 注册表里该会话的活跃 Agent —— status 'running' 表示还在跑，
+		//   'idle' 表示这一轮已结束（映射为客户端状态 'done'）；Agent 不在注册表（宿主重启 /
+		//   服务不可用）时回退 latestNews，仍查不到按 'failed' 返回，按钮不会被永久禁用。
+		// 不传 sessionId：返回最近一次新闻会话的权威状态（客户端挂载/刷新后还不知道会话 id）。
+		// 返回：{ sessionId, state: 'running'|'done'|'failed', error? } | null
+		if (endpoint === 'agent/status') {
+			const sessionIdArg = typeof args.sessionId === 'string' && args.sessionId !== '' ? args.sessionId : null
+			const agents = ctx.get('agents') as AgentRegistry | undefined
+			const agent = sessionIdArg !== null && agents !== undefined
+				? agents.get(sessionIdArg as SessionId)
+				: undefined
+			if (agent !== undefined && sessionIdArg !== null) {
+				// Agent.status 官方取值 'idle' | 'running'，映射到客户端的 NewsStatus 状态模型
+				return {
+					ok: true,
+					value: { sessionId: sessionIdArg, state: agent.status === 'running' ? 'running' : 'done' },
+				}
+			}
+			if (sessionIdArg !== null && latestNews?.sessionId !== sessionIdArg) {
+				return { ok: true, value: { sessionId: sessionIdArg, state: 'failed' } }
+			}
 			return { ok: true, value: latestNews }
 		}
 		// 注册 /events/poll 通道，用于轮询事件

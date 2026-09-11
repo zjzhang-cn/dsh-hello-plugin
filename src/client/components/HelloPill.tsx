@@ -29,7 +29,7 @@ interface NewsSettledPayload {
   message?: string
 }
 
-/** /hello/news/status 返回的最近一次新闻会话状态。 */
+/** /hello/agent/status 返回的新闻会话状态（活跃 Agent 实时状态，或最近一次会话的权威状态）。 */
 interface NewsStatusPayload {
   sessionId: string
   state: 'running' | 'done' | 'failed'
@@ -71,7 +71,7 @@ export function HelloPill({ connection }: HelloPillProps): React.ReactElement {
   const pendingNewsSessionRef = React.useRef<string | null>(null)
   // 结束事件先于 news/start 响应抵达时暂存的结果（只留最近 5 条），供 startNewsSession 核对
   const settledNewsRef = React.useRef<Array<{ sessionId: string; error: string | null }>>([])
-  // 未决会话 id 的确立时刻：用于判定「宿主重启后 /news/status 查不到会话」（见看门狗）
+  // 未决会话 id 的确立时刻：用于判定「宿主重启后 /agent/status 查不到会话」（见看门狗）
   const pendingNewsSinceRef = React.useRef<number | null>(null)
   const [isMinimized, setIsMinimized] = React.useState(false)
 
@@ -153,7 +153,7 @@ export function HelloPill({ connection }: HelloPillProps): React.ReactElement {
 
   /**
    * 按宿主权威状态收敛新闻按钮：只有当「未决会话已结束」（或没有未决会话但最近一次已结束）
-   * 时才解除禁用。事件（news/done / news/failed）与 /news/status 兜底核对共用这段逻辑。
+   * 时才解除禁用。事件（news/done / news/failed）与 /agent/status 兜底核对共用这段逻辑。
    */
   const settleNews = (status: NewsStatusPayload): void => {
     const pending = pendingNewsSessionRef.current
@@ -226,8 +226,10 @@ export function HelloPill({ connection }: HelloPillProps): React.ReactElement {
   // 挂载时同步一次新闻状态：页面在 Agent 运行途中刷新时，按钮应保持禁用态
   React.useEffect(() => {
     let cancelled = false
+    // 不带 sessionId：刷新后组件还不知道会话 id，宿主会返回最近一次新闻会话的权威状态
+    // （其中 running 分支已是 Agent 的实时状态），是唯一的恢复入口
     void connection.rpc
-      .call('/hello', 'news/status', { args: {} })
+      .call('/hello', 'agent/status', { args: {} })
       .then((result) => {
         if (cancelled || !result.ok) return
         const status = result.value as NewsStatusPayload | null
@@ -241,13 +243,15 @@ export function HelloPill({ connection }: HelloPillProps): React.ReactElement {
   }, [connection])
 
   // 兜底看门狗：事件可能丢失（页面刷新、长轮询请求中断、宿主重启），
-  // 禁用期间每 3 秒用 /news/status 核对一次，结束就恢复按钮，不会永久卡住
+  // 禁用期间每 3 秒用 /agent/status 核对一次 —— 带未决会话 id 时查的是活跃 Agent 的
+  // 实时状态（status 变 idle 即结束），结束就恢复按钮，不会永久卡住
   React.useEffect(() => {
     if (!newsLoading) return
     let cancelled = false
     const timer = setInterval(() => {
+      const pending = pendingNewsSessionRef.current
       void connection.rpc
-        .call('/hello', 'news/status', { args: {} })
+        .call('/hello', 'agent/status', { args: pending === null ? {} : { sessionId: pending } })
         .then((result) => {
           if (cancelled || !result.ok) return
           const status = result.value as NewsStatusPayload | null

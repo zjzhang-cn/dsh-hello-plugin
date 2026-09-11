@@ -219,13 +219,13 @@ dsh 采用「双面（dual-face）」插件模型：同一个包同时提供 Nod
 点击悬浮区域独立的「📰 获取新闻」按钮（青色，与 hello 按钮并列），宿主会发起一个**新会话**，会话里的 Agent 通过工具获取最新 Google 新闻并总结 —— LLM 交互全过程都在这个新会话中，dsh Web UI 的会话列表会自动出现该会话，点开即可查看完整过程：
 
 - **宿主端点**：`/hello/news/start`（`{ args: {} }`）。`ctx.agents.create()` 创建新会话（sessionId `news-<uuid>`，agentOptions 取 `llm.config.json` 的 provider/model）→ `ctx.sessionTitle.rename()` 命名「获取新闻 <HH:mm:ss>」→ `setup` 中注册**作用域工具** `google_news` → `agent.followup()` 让 Agent 获取新闻并总结 → 立即返回 `{ sessionId }`（不等待完成，会话后台运行）；同时后台 `agent.whenIdle()`，会话跑完后经长轮询推 `news/done`（失败推 `news/failed` + message）给前端（会话**不 dispose**，保留在左侧「新闻头条」工作区）。
-- **宿主端点 `/hello/news/status`**：返回最近一次新闻会话的权威状态 `{ sessionId, state: 'running' | 'done' | 'failed', error? } | null`。事件可能丢失（页面刷新、长轮询中断、宿主重启），客户端在禁用期间用它兜底核对，**按钮不会永久卡在「正在获取…」**。
+- **宿主端点 `/hello/agent/status`**（`{ args: { sessionId? } }`）：查「获取新闻」Agent 的状态控制按钮禁用态。带 `sessionId` → 从 `ctx.agents` 注册表查该会话的**活跃 Agent**：`agent.status` 为 `running` 返回 `running`，`idle`（这一轮已跑完）映射为 `done`；Agent 不在注册表（宿主重启 / 服务不可用）时回退最近一次会话的权威状态，仍查不到按 `failed` 返回。不带 `sessionId`（页面刷新后客户端还不知道会话 id）→ 返回最近一次新闻会话的权威状态 `{ sessionId, state: 'running' | 'done' | 'failed', error? } | null`。事件可能丢失（页面刷新、长轮询中断、宿主重启），客户端在禁用期间用它兜底核对，**按钮不会永久卡在「正在获取…」**。
 - **工作区分组**：`workspaceRegistry.create(cwd, '新闻头条')` 创建/复用「新闻头条」工作区（`setTitle` 固定显示名）→ `attachSession(sessionId)` 把会话归入该工作区，dsh Web UI 会话列表按「新闻头条」分组显示。
 - **google_news 工具**：抓取 `https://news.google.com/rss?hl=...`。**支持 HTTP 代理**：优先走 Node 全局 fetch；环境配置了 `HTTPS_PROXY`/`HTTP_PROXY`（兼容小写）/`ALL_PROXY` 且目标不在 `NO_PROXY` 内时，经代理链路抓取（https 目标走 CONNECT 隧道，纯 Node 内建实现，无新增运行时依赖），自动跟随重定向。正则解析 `<item>` 的标题/链接/发布时间，取前 15 条。工具通过 `ctx.tools.register` 从 agentCtx 注册（`ScopedLayers` 作用域机制），**仅该会话的 Agent 可见**，不污染全局工具表。
 - **会话可见性**：宿主创建会话自动触发 `api-session/added` Remote 事件，dsh Web UI 会话列表自动出现新会话（无需客户端刷新）；点开可见 user/message → google_news 工具调用（tool/call + tool/result 含新闻列表）→ assistant 总结的完整交互。
 - **客户端按钮互斥**：点击「📰 获取新闻」后按钮立即禁用并显示「正在获取…」（`disabled` + `not-allowed` 光标），**保持禁用直到 Agent 会话跑完**；运行中按钮上方显示「⏳ Agent 正在获取新闻（会话 …）」，结束/失败后分别显示「✅ 已创建会话 …」或红色错误条（如 `llm-not-configured`，此时按钮立即恢复）。三条恢复路径互为兜底：
   1. **事件**：按 `sessionId` 匹配宿主推来的 `news/done` / `news/failed`（旧会话事件丢弃；若事件先于 `news/start` 响应抵达则暂存后由响应侧核对）；
-  2. **状态看门狗**：禁用期间每 3 秒调用 `/hello/news/status`，宿主状态已不是 `running` 就恢复（覆盖事件丢失、页面在运行途中刷新、宿主重启导致状态丢失）；
+  2. **状态看门狗**：禁用期间每 3 秒调用 `/hello/agent/status` —— 带未决会话 id 时查的是**活跃 Agent 的实时状态**（`agent.status` 从 `running` 变 `idle` 即本轮结束），id 未知（刷新后）则回退最近一次会话状态；不是 `running` 就恢复（覆盖事件丢失、页面在运行途中刷新、宿主重启导致状态丢失）；
   3. **请求超时**：`events/poll` 与 `news/start` 都带 `AbortSignal.timeout`（20s / 30s），长轮询请求因宿主重启悬住时超时重试，不会把轮询循环卡死。
 - 需要 `llm.config.json` 配置 provider/model；Google News RSS 抓取无需任何 key。
 
@@ -274,6 +274,7 @@ ssh -L 3080:127.0.0.1:3080 <remote-host>
 
 ## 开发日志
 
+- **2026-09-11 「获取新闻」按钮状态改用 agent/status 查询 Agent 实时状态** — 新端点 `/hello/agent/status`（替代 `/news/status`）：带 `sessionId` 查 `ctx.agents` 里活跃 Agent 的 `agent.status`（`running`；`idle` 即本轮结束映射 `done`），查不到活跃 Agent 回退最近一次会话的权威状态、再无则 `failed`；不带 id 返回最近一次会话状态（刷新场景）。客户端挂载同步改回无参查询（修掉刷新后不保持禁用的回归），看门狗带未决 id 查询实时状态；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-10 修复「获取新闻」按钮不恢复（状态看门狗 + 长轮询超时）** — 按钮只靠单条 `news/done` 事件恢复，长轮询链路一断就永久禁用（宿主重启会把在飞请求悬住，`inflight` 卡死后循环不再发请求）。实测确认宿主确实推了 `news/done`（自签 browser cookie 直连 `/hello` 验证），改为三条兜底：新增宿主 `/hello/news/status` 权威状态端点 + 客户端禁用期间每 3 秒核对，`events/poll` 加 20s、`news/start` 加 30s `AbortSignal.timeout`，事件先到/状态丢失都能收敛；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-10 获取新闻按钮在 Agent 跑完前禁用** — 原实现 `news/start` 返回后即取消 loading，按钮只禁用一次往返、Agent 仍在跑时可重复点击：改为宿主 `followup` 后 `whenIdle()` 推 `news/done` / `news/failed`（复用长轮询事件链），客户端按 `sessionId` 匹配才恢复，禁用期间按钮「正在获取…」+ `not-allowed` 光标，提示条区分运行中（⏳）/ 已完成（✅）；详见 [开发日志](docs/dev-log.md)。
 - **2026-09-10 修复 /hello 通道不可用（rpc.handle 缺陷 → 自建 web 通道）** — 现象：插件树加载失败（`cannot get property "webServer" without inject`），或侥幸加载后浏览器报 `transport failure for /hello/news/start: HTTP 405`。根因：`connection.rpc.handle` 把通道挂到 **connection 插件自身 ctx** 的 webServer 上（`rpc-host.ts` 的 `register()`），解析起点是 connection 的 fiber，消费方无法通过声明依赖满足。改为新建 `src/host/web-channel.ts` 自建 `/hello` 路由：插件自己的 `webServer` 注册前缀路由 + 复用 `connection.requestRejection`（Host/Origin + 浏览器 cookie 栅栏）+ Connection RPC 信封，客户端零改动；`inject` 增加 `webServer`、新增类型依赖 `dsh-host-webserver`；实测 cookie 鉴权下 ping / jira/todos / events/poll 全链路通过；详见 [开发日志](docs/dev-log.md)。
@@ -332,7 +333,7 @@ ssh -L 3080:127.0.0.1:3080 <remote-host>
 5. 配置 Jira 凭据（任选其一，工程文件优先）后，卡片展示「我的待办」列表（每项含类型徽章 + 摘要 + `KEY · 状态`）；未配置时显示 `Jira: jira-not-configured` 提示条。开发时在工程根放 `jira.config.json`（见 `jira.config.example.json`）即可，无需改全局 settings.yaml。
 6. 在工程根放 `llm.config.json`（见 `llm.config.example.json`）配置 provider/model 后，点击某个待办项：面板出现「Agent 正在分析…」（附会话提示）；宿主日志出现会话创建与 `emit: jira/analysis-done`；左侧工作区出现「Jira 分析」分组与「分析 KEY HH:mm:ss」会话（运行中可点开查看 user/message → `jira_get_issue` 工具调用 → 输出的完整过程）→ 完成后面板展示分析文本 → 点「添加到评论」写回 Jira 并显示「✅ 已添加到 Jira 评论」；未配置 LLM 时立即显示 `llm-not-configured`。
 7. 点击「📰 获取新闻」按钮：按钮立即禁用并显示「正在获取…」且**在 Agent 跑完前不可再次点击**（提示条「⏳ Agent 正在获取新闻（会话 news-xxx）」）；dsh Web UI 会话列表自动出现该会话，点开可见完整 LLM 交互（user/message → google_news 工具调用含新闻列表 → assistant 总结）；**Agent 会话静止后**宿主推 `news/done`，按钮恢复可点击、提示条变「✅ 已创建会话 news-xxx，在会话列表查看 Agent 总结」。未配置 LLM 时立即显示 `llm-not-configured` 错误条，按钮随即恢复。
-8. 兜底核对（可选）：`news/status` 端点可直接验证 —— `curl` 带浏览器 cookie POST `/hello/news/status` 返回 `{ sessionId, state }`；即使 `news/done` 事件丢失（刷新页面 / 长轮询中断 / 宿主重启），按钮也会在 3 秒内按该状态恢复。**宿主半区改动需重启 `dsh web` 生效**（客户端 bundle 由 HMR 热加载）。
+8. 兜底核对（可选）：`agent/status` 端点可直接验证 —— `curl` 带浏览器 cookie POST `/hello/agent/status`（body 可带 `{"args":{"sessionId":"news-xxx"}}`）返回 `{ sessionId, state }`：带 id 时 state 来自**活跃 Agent 的实时状态**（`running`；跑完变 `done`；Agent 不在注册表且无记录则 `failed`），不带 id 时返回最近一次会话的权威状态（`null` 表示还没有过新闻会话）；即使 `news/done` 事件丢失（刷新页面 / 长轮询中断 / 宿主重启），按钮也会在 3 秒内按该状态恢复。**宿主半区改动需重启 `dsh web` 生效**（客户端 bundle 由 HMR 热加载）。
 
 客户端半区在 dev 模式下由 harness 的 `scripts/dev-web.ts` watch 构建（按 `dsh.client` 扫描发现），改动后无需手动打包。
 
