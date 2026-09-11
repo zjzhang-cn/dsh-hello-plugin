@@ -55,7 +55,7 @@ function buildTaskPrompt(key: string, summary: string): string {
 		`请分析 Jira issue ${key}（标题：${summary}）。`,
 		`步骤：先用 jira_get_issue 工具获取该 issue 的完整详情（描述与已有评论），再输出分析。`,
 		`分析请用简洁的中文总结三点：它要解决什么问题、当前状态与关键信息、可能的下一步。只输出分析内容本身，不要客套。`,
-		`注意：本任务只做分析，禁止调用任何写操作工具（jira_add_comment、jira_update_status、jira_create_issue）。`,
+		`注意：本任务只做分析，禁止调用任何写操作工具（jira_add_comment、jira_update_status、jira_create_issue、confluence_create_page、confluence_update_page、confluence_add_comment）。`,
 	].join('\n')
 }
 

@@ -3,3 +3,4 @@ node_modules/
 .agent-teams
 jira.config.json
 llm.config.json
+confluence.config.json

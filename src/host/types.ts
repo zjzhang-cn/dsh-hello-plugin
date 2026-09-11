@@ -11,6 +11,13 @@ export interface JiraSettings {
   apiToken?: string | undefined
 }
 
+/** Confluence 连接配置（与 Jira 同域：Atlassian 站点 + 邮箱 + API Token）。 */
+export interface ConfluenceSettings {
+  baseUrl?: string | undefined
+  email?: string | undefined
+  apiToken?: string | undefined
+}
+
 /** LLM 配置。 */
 export interface LlmConfig {
   provider?: string | undefined

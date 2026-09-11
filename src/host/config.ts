@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { ConfigLoaderLogger, JiraSettings, LlmConfig } from './types'
+import type { ConfigLoaderLogger, ConfluenceSettings, JiraSettings, LlmConfig } from './types'
 
 /** 从 bundle 所在目录逐级向上查找一个 JSON 配置文件。 */
 export function loadProjectJsonConfig<T extends Record<string, unknown>>(
@@ -31,6 +31,16 @@ export function loadProjectJsonConfig<T extends Record<string, unknown>>(
 
 export function loadProjectJiraConfig(logger: ConfigLoaderLogger): JiraSettings | null {
   const parsed = loadProjectJsonConfig<Partial<JiraSettings>>('jira.config.json', logger)
+  if (parsed === null) return null
+  return {
+    baseUrl: typeof parsed.baseUrl === 'string' ? parsed.baseUrl : undefined,
+    email: typeof parsed.email === 'string' ? parsed.email : undefined,
+    apiToken: typeof parsed.apiToken === 'string' ? parsed.apiToken : undefined,
+  }
+}
+
+export function loadProjectConfluenceConfig(logger: ConfigLoaderLogger): ConfluenceSettings | null {
+  const parsed = loadProjectJsonConfig<Partial<ConfluenceSettings>>('confluence.config.json', logger)
   if (parsed === null) return null
   return {
     baseUrl: typeof parsed.baseUrl === 'string' ? parsed.baseUrl : undefined,

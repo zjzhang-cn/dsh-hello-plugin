@@ -1,0 +1,5 @@
+{
+  "baseUrl": "https://your-domain.atlassian.net",
+  "email": "you@example.com",
+  "apiToken": "your-api-token"
+}

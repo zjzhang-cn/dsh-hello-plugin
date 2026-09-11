@@ -8,14 +8,15 @@ import type { } from '@deepseek-ai/dsh-session-title'
 import type { WorkspaceRegistry } from '@deepseek-ai/dsh-workspace'
 import z from '@deepseek-ai/schemastery'
 import { name, inject, POLL_TIMEOUT_MS } from './constants'
-import { loadProjectJiraConfig, loadProjectLlmConfig } from './config'
+import { loadProjectJiraConfig, loadProjectConfluenceConfig, loadProjectLlmConfig } from './config'
 import { fetchJiraTodos, fetchJiraIssueSummary, addJiraComment } from './jira'
 import { registerJiraTools } from './jira-tools'
 import { runJiraAnalysisSession } from './jira-agent'
+import { registerConfluenceTools } from './confluence-tools'
 import { installGoogleNewsTool } from './news'
 import { mountHelloChannel } from './web-channel'
 import { JiraConfigError, rpcFailure } from './errors'
-import type { PendingEvent, JiraSettings, LlmConfig, NewsStatus } from './types'
+import type { PendingEvent, JiraSettings, ConfluenceSettings, LlmConfig, NewsStatus } from './types'
 
 export { name, inject }
 export type { JiraTodo, JiraSettings } from './types'
@@ -41,6 +42,22 @@ export function apply(ctx: Context): void {
 		logger.warn('settings 服务不可用且无 jira.config.json，jira/todos 端点将返回未配置')
 	}
 	const resolveJiraSettings = (): JiraSettings => projectConfig ?? settingsJira
+
+	// ---- Confluence 配置：工程根 confluence.config.json 优先，其次 ctx.settings（同 jira 模式）----
+	const projectConfluenceConfig = loadProjectConfluenceConfig(logger)
+	let settingsConfluence: ConfluenceSettings = {}
+	if (settingsService !== undefined) {
+		const scope = settingsService.register('confluence', z.object({
+			baseUrl: z.string().required(false),
+			email: z.string().required(false),
+			apiToken: z.string().required(false),
+		}))
+		settingsConfluence = scope.get()
+		scope.watch(() => { settingsConfluence = scope.get() })
+	} else if (projectConfluenceConfig === null) {
+		logger.warn('settings 服务不可用且无 confluence.config.json，confluence_* 工具将返回未配置')
+	}
+	const resolveConfluenceSettings = (): ConfluenceSettings => projectConfluenceConfig ?? settingsConfluence
 
 	// ---- LLM 配置：工程根 llm.config.json（provider / model）----
 	const llmConfig = loadProjectLlmConfig(logger) ?? {}
@@ -74,8 +91,9 @@ export function apply(ctx: Context): void {
 		}
 	}
 
-	// ---- 注册 Jira 全局工具 ----
+	// ---- 注册 Jira / Confluence 全局工具 ----
 	registerJiraTools(ctx, resolveJiraSettings)
+	registerConfluenceTools(ctx, resolveConfluenceSettings)
 
 	// /hello 通道的处理器：客户端经 ctx.connection.rpc.call('/hello', endpoint, { args }) 调用。
 	const handleHello: ConnectionRpcHandler = async (endpoint, payload, signal): Promise<ConnectionRpcResult<unknown>> => {
@@ -282,14 +300,15 @@ export function apply(ctx: Context): void {
 			}
 		}
 		// 注册 /agent/status 通道：查询 Agent 的实时状态.
-		// 传 sessionId：直接查 agents 注册表里该会话的活跃 Agent —— status 'running' 表示还在跑，
-		//   'idle' 表示这一轮已结束（映射为客户端状态 'done'）；Agent 不在注册表（宿主重启 /
-		//   服务不可用）时回退 latestNews，仍查不到按 'failed' 返回，按钮不会被永久禁用。
-		// 不传 sessionId：返回最近一次新闻会话的权威状态（客户端挂载/刷新后还不知道会话 id）。
+		// 输入：{ sessionId? }
 		// 返回：{ sessionId, state: 'running'|'done'|'failed', error? } | null
 		if (endpoint === 'agent/status') {
 			// 获取sessionId
 			const sessionIdArg = typeof args.sessionId === 'string' && args.sessionId !== '' ? args.sessionId : null
+			if (sessionIdArg === null) {
+				// 获取 latestNews
+				return { ok: true, value: "failed" }
+			}
 			// 获取agents 服务（官方 dsh-agent 类型）
 			const agents = ctx.get('agents') as AgentRegistry | undefined
 			// 获取该sessionId对应的Agent
@@ -302,11 +321,10 @@ export function apply(ctx: Context): void {
 					ok: true,
 					value: { sessionId: sessionIdArg, state: agent.status === 'running' ? 'running' : 'done' },
 				}
-			}
-			if (sessionIdArg !== null && latestNews?.sessionId !== sessionIdArg) {
+			} else {
 				return { ok: true, value: { sessionId: sessionIdArg, state: 'failed' } }
 			}
-			return { ok: true, value: latestNews }
+
 		}
 		// 注册 /events/poll 通道，用于轮询事件
 		// 请求参数：无
